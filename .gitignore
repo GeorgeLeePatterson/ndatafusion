@@ -1,0 +1,11 @@
+/target
+/corpora/*
+!/corpora/synthetic_hydroponics.txt
+!/corpora/synthetic_hydroponics.truth.tsv
+!/corpora/synthetic_bioreactor_chain.txt
+!/corpora/synthetic_bioreactor_chain.truth.tsv
+!/corpora/synthetic_assembly_line.txt
+!/corpora/synthetic_assembly_line.truth.tsv
+/results
+/data
+.claude/
