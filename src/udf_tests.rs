@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::types::Float64Type;
+use datafusion::arrow::array::types::{Float32Type, Float64Type};
 use datafusion::arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, Float64Array, Int8Array, Int64Array, ListArray,
-    StructArray,
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int64Array,
+    ListArray, StructArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::ScalarValue;
@@ -27,6 +27,13 @@ fn fixed_size_list<const R: usize, const C: usize>(rows: [[f64; C]; R]) -> Fixed
     )
 }
 
+fn fixed_size_list_f32<const R: usize, const C: usize>(rows: [[f32; C]; R]) -> FixedSizeListArray {
+    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+        rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
+        i32::try_from(C).expect("fixed-size-list width should fit i32"),
+    )
+}
+
 fn matrix_batch<const B: usize, const R: usize, const C: usize>(
     name: &str,
     values: [[[f64; C]; R]; B],
@@ -38,7 +45,29 @@ fn matrix_batch<const B: usize, const R: usize, const C: usize>(
     (Arc::new(field), array)
 }
 
+fn matrix_batch_f32<const B: usize, const R: usize, const C: usize>(
+    name: &str,
+    values: [[[f32; C]; R]; B],
+) -> (FieldRef, FixedSizeListArray) {
+    let values = values.into_iter().flatten().flatten().collect::<Vec<f32>>();
+    let array = Array3::from_shape_vec((B, R, C), values).expect("matrix batch shape");
+    let (field, array) =
+        ndarrow::arrayd_to_fixed_shape_tensor(name, array.into_dyn()).expect("matrix batch");
+    (Arc::new(field), array)
+}
+
 fn ragged_vectors(name: &str, rows: Vec<Vec<f64>>) -> (FieldRef, StructArray) {
+    let rows = rows
+        .into_iter()
+        .map(Array1::from_vec)
+        .map(ndarray::ArrayBase::into_dyn)
+        .collect::<Vec<_>>();
+    let (field, array) =
+        ndarrow::arrays_to_variable_shape_tensor(name, rows, Some(vec![None])).expect("ragged");
+    (Arc::new(field), array)
+}
+
+fn ragged_vectors_f32(name: &str, rows: Vec<Vec<f32>>) -> (FieldRef, StructArray) {
     let rows = rows
         .into_iter()
         .map(Array1::from_vec)
@@ -67,11 +96,40 @@ fn ragged_matrices(name: &str, rows: Vec<Vec<Vec<f64>>>) -> (FieldRef, StructArr
     (Arc::new(field), array)
 }
 
+fn ragged_matrices_f32(name: &str, rows: Vec<Vec<Vec<f32>>>) -> (FieldRef, StructArray) {
+    let rows = rows
+        .into_iter()
+        .map(|matrix| {
+            let row_count = matrix.len();
+            let col_count = matrix.first().map_or(0, Vec::len);
+            let values = matrix.into_iter().flatten().collect::<Vec<_>>();
+            Array2::from_shape_vec((row_count, col_count), values)
+                .expect("matrix batch shape")
+                .into_dyn()
+        })
+        .collect::<Vec<_>>();
+    let (field, array) =
+        ndarrow::arrays_to_variable_shape_tensor(name, rows, Some(vec![None, None]))
+            .expect("ragged matrices");
+    (Arc::new(field), array)
+}
+
 fn tensor_batch4<const B: usize, const D0: usize, const D1: usize, const D2: usize>(
     name: &str,
     values: [[[[f64; D2]; D1]; D0]; B],
 ) -> (FieldRef, FixedSizeListArray) {
     let values = values.into_iter().flatten().flatten().flatten().collect::<Vec<f64>>();
+    let array = Array4::from_shape_vec((B, D0, D1, D2), values).expect("tensor batch shape");
+    let (field, array) =
+        ndarrow::arrayd_to_fixed_shape_tensor(name, array.into_dyn()).expect("tensor batch");
+    (Arc::new(field), array)
+}
+
+fn tensor_batch4_f32<const B: usize, const D0: usize, const D1: usize, const D2: usize>(
+    name: &str,
+    values: [[[[f32; D2]; D1]; D0]; B],
+) -> (FieldRef, FixedSizeListArray) {
+    let values = values.into_iter().flatten().flatten().flatten().collect::<Vec<f32>>();
     let array = Array4::from_shape_vec((B, D0, D1, D2), values).expect("tensor batch shape");
     let (field, array) =
         ndarrow::arrayd_to_fixed_shape_tensor(name, array.into_dyn()).expect("tensor batch");
@@ -90,6 +148,18 @@ fn sparse_batch(name: &str) -> (FieldRef, StructArray) {
     (Arc::new(field), array)
 }
 
+fn sparse_batch_f32(name: &str) -> (FieldRef, StructArray) {
+    let (field, array) = ndarrow::csr_batch_to_extension_array(
+        name,
+        vec![[2, 3], [2, 2]],
+        vec![vec![0, 2, 3], vec![0, 1, 3]],
+        vec![vec![0, 2, 1], vec![0, 0, 1]],
+        vec![vec![1.0_f32, 2.0, 3.0], vec![4.0_f32, 5.0, 6.0]],
+    )
+    .expect("sparse batch");
+    (Arc::new(field), array)
+}
+
 fn sparse_batch_rhs(name: &str) -> (FieldRef, StructArray) {
     let (field, array) = ndarrow::csr_batch_to_extension_array(
         name,
@@ -102,8 +172,26 @@ fn sparse_batch_rhs(name: &str) -> (FieldRef, StructArray) {
     (Arc::new(field), array)
 }
 
+fn sparse_batch_rhs_f32(name: &str) -> (FieldRef, StructArray) {
+    let (field, array) = ndarrow::csr_batch_to_extension_array(
+        name,
+        vec![[3, 2], [2, 2]],
+        vec![vec![0, 1, 2, 4], vec![0, 1, 2]],
+        vec![vec![0, 1, 0, 1], vec![0, 1]],
+        vec![vec![1.0_f32, 1.0, 1.0, 1.0], vec![1.0_f32, 1.0]],
+    )
+    .expect("sparse rhs batch");
+    (Arc::new(field), array)
+}
+
 fn float64_list_array(rows: Vec<Vec<f64>>) -> ListArray {
     ListArray::from_iter_primitive::<Float64Type, _, _>(
+        rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
+    )
+}
+
+fn float32_list_array(rows: Vec<Vec<f32>>) -> ListArray {
+    ListArray::from_iter_primitive::<Float32Type, _, _>(
         rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
     )
 }
@@ -124,6 +212,10 @@ fn scalar_float64_list(values: Vec<f64>) -> ScalarValue {
     ScalarValue::List(Arc::new(float64_list_array(vec![values])))
 }
 
+fn scalar_float32_list(values: Vec<f32>) -> ScalarValue {
+    ScalarValue::List(Arc::new(float32_list_array(vec![values])))
+}
+
 fn scalar_int32_list(values: Vec<i32>) -> ScalarValue {
     ScalarValue::List(Arc::new(int32_list_array(vec![values])))
 }
@@ -135,11 +227,25 @@ fn scalar_nested_float64_list(rows: Vec<Vec<f64>>) -> ScalarValue {
     ScalarValue::List(Arc::new(wrapped))
 }
 
+fn scalar_nested_float32_list(rows: Vec<Vec<f32>>) -> ScalarValue {
+    let nested = float32_list_array(rows);
+    let wrapped =
+        arrays_into_list_array([Arc::new(nested) as ArrayRef]).expect("single nested list scalar");
+    ScalarValue::List(Arc::new(wrapped))
+}
+
 fn f64_array(values: &ColumnarValue) -> &Float64Array {
     let ColumnarValue::Array(array) = values else {
         panic!("expected array output");
     };
     array.as_any().downcast_ref::<Float64Array>().expect("expected Float64Array")
+}
+
+fn f32_array(values: &ColumnarValue) -> &Float32Array {
+    let ColumnarValue::Array(array) = values else {
+        panic!("expected array output");
+    };
+    array.as_any().downcast_ref::<Float32Array>().expect("expected Float32Array")
 }
 
 fn fixed_size_list_array(values: &ColumnarValue) -> &FixedSizeListArray {
@@ -154,6 +260,13 @@ fn struct_array(values: &ColumnarValue) -> &StructArray {
         panic!("expected array output");
     };
     array.as_any().downcast_ref::<StructArray>().expect("expected StructArray")
+}
+
+fn array_data_type(values: &ColumnarValue) -> &DataType {
+    let ColumnarValue::Array(array) = values else {
+        panic!("expected array output");
+    };
+    array.data_type()
 }
 
 fn fixed_shape_view3<'a>(
@@ -507,8 +620,8 @@ fn constructor_udfs_support_empty_batches() {
 fn vector_udfs_cover_real_batch_ops() {
     let left = fixed_size_list([[3.0, 4.0, 0.0], [1.0, 2.0, 2.0]]);
     let right = fixed_size_list([[4.0, 0.0, 3.0], [2.0, 2.0, 1.0]]);
-    let left_field = vector_field("left", 3, false).expect("vector field");
-    let right_field = vector_field("right", 3, false).expect("vector field");
+    let left_field = vector_field("left", &DataType::Float64, 3, false).expect("vector field");
+    let right_field = vector_field("right", &DataType::Float64, 3, false).expect("vector field");
     let l2_norm_udf = udfs::vector_l2_norm_udf();
     let dot_udf = udfs::vector_dot_udf();
     let cosine_similarity_udf = udfs::vector_cosine_similarity_udf();
@@ -593,7 +706,7 @@ fn matrix_udfs_cover_matmul_and_lu_solve() {
     let (right_field, right) =
         matrix_batch("right_matrix", [[[2.0, 0.0], [1.0, 2.0]], [[1.0, 1.0], [0.0, 1.0]]]);
     let rhs = fixed_size_list([[5.0, 11.0], [4.0, 5.0]]);
-    let rhs_field = vector_field("rhs", 2, false).expect("rhs field");
+    let rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
     let matmul_udf = udfs::matrix_matmul_udf();
     let lu_solve_udf = udfs::matrix_lu_solve_udf();
 
@@ -634,6 +747,31 @@ fn matrix_udfs_cover_matmul_and_lu_solve() {
     assert_close(solved[[0, 1]], 2.0);
     assert_close(solved[[1, 0]], 2.0);
     assert_close(solved[[1, 1]], 1.5);
+}
+
+#[test]
+fn matrix_matvec_udf_covers_rowwise_matrix_vector_products() {
+    let (matrix_field, matrices) =
+        matrix_batch("matrices", [[[1.0, 2.0], [3.0, 4.0]], [[2.0, 0.0], [1.0, 2.0]]]);
+    let vectors = fixed_size_list([[2.0, 1.0], [3.0, 4.0]]);
+    let vector_field = vector_field("vectors", &DataType::Float64, 2, false).expect("vector field");
+    let matvec_udf = udfs::matrix_matvec_udf();
+
+    let (_, product) = invoke_udf(
+        &matvec_udf,
+        vec![ColumnarValue::Array(Arc::new(matrices)), ColumnarValue::Array(Arc::new(vectors))],
+        vec![matrix_field, vector_field],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_matvec");
+    let product =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(fixed_size_list_array(&product))
+            .expect("matrix-vector product");
+    assert_close(product[[0, 0]], 4.0);
+    assert_close(product[[0, 1]], 10.0);
+    assert_close(product[[1, 0]], 6.0);
+    assert_close(product[[1, 1]], 11.0);
 }
 
 #[test]
@@ -745,7 +883,8 @@ fn linear_regression_returns_struct_result() {
             1.0, 1.0,
         ]]]);
     let response = fixed_size_list([[1.0, 2.0, 3.0], [2.0, 1.0, 3.0]]);
-    let response_field = vector_field("response", 3, false).expect("response field");
+    let response_field =
+        vector_field("response", &DataType::Float64, 3, false).expect("response field");
     let linear_regression_udf = udfs::linear_regression_udf();
     let (_, regression) = invoke_udf(
         &linear_regression_udf,
@@ -854,7 +993,7 @@ fn matrix_cholesky_udfs_cover_struct_solver_and_inverse_outputs() {
     let (field, matrices) =
         matrix_batch("matrix", [[[9.0, 0.0], [0.0, 4.0]], [[16.0, 0.0], [0.0, 1.0]]]);
     let rhs = fixed_size_list([[9.0, 8.0], [32.0, 3.0]]);
-    let rhs_field = vector_field("rhs", 2, false).expect("rhs field");
+    let rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
 
     let cholesky_udf = udfs::matrix_cholesky_udf();
     let cholesky_solve_udf = udfs::matrix_cholesky_solve_udf();
@@ -987,6 +1126,93 @@ fn matrix_qr_and_svd_udfs_cover_struct_outputs() {
     assert_close(singular_values[[1, 1]], 1.0);
     assert_close(vt[[0, 0, 0]], 1.0);
     assert_close(vt[[0, 1, 1]], 1.0);
+}
+
+#[test]
+fn matrix_qr_and_svd_helper_udfs_cover_solver_scalar_and_inverse_outputs() {
+    let qr_solve_udf = udfs::matrix_qr_solve_least_squares_udf();
+    let qr_condition_udf = udfs::matrix_qr_condition_number_udf();
+    let svd_pseudo_inverse_udf = udfs::matrix_svd_pseudo_inverse_udf();
+    let svd_condition_udf = udfs::matrix_svd_condition_number_udf();
+    let svd_rank_udf = udfs::matrix_svd_rank_udf();
+
+    let (qr_field, qr_matrices) =
+        matrix_batch("qr", [[[2.0, 0.0], [0.0, 1.0]], [[3.0, 0.0], [0.0, 4.0]]]);
+    let rhs = fixed_size_list([[4.0, 3.0], [9.0, 8.0]]);
+    let rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
+    let (_, qr_solution) = invoke_udf(
+        &qr_solve_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(qr_matrices.clone())),
+            ColumnarValue::Array(Arc::new(rhs)),
+        ],
+        vec![Arc::clone(&qr_field), rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_qr_solve_least_squares");
+    let qr_solution =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(fixed_size_list_array(&qr_solution))
+            .expect("least-squares solution");
+    assert_close(qr_solution[[0, 0]], 2.0);
+    assert_close(qr_solution[[0, 1]], 3.0);
+    assert_close(qr_solution[[1, 0]], 3.0);
+    assert_close(qr_solution[[1, 1]], 2.0);
+
+    let (_, qr_condition) = invoke_udf(
+        &qr_condition_udf,
+        vec![ColumnarValue::Array(Arc::new(qr_matrices))],
+        vec![qr_field],
+        &[None],
+        2,
+    )
+    .expect("matrix_qr_condition_number");
+    assert_close(f64_array(&qr_condition).value(0), 2.0);
+    assert_close(f64_array(&qr_condition).value(1), 4.0 / 3.0);
+
+    let (svd_field, svd_matrices) =
+        matrix_batch("svd", [[[4.0, 0.0], [0.0, 2.0]], [[9.0, 0.0], [0.0, 3.0]]]);
+    let (pseudo_inverse_field, pseudo_inverse) = invoke_udf(
+        &svd_pseudo_inverse_udf,
+        vec![ColumnarValue::Array(Arc::new(svd_matrices.clone()))],
+        vec![Arc::clone(&svd_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_svd_pseudo_inverse");
+    let pseudo_inverse = fixed_shape_view3(&pseudo_inverse_field, &pseudo_inverse);
+    assert_close(pseudo_inverse[[0, 0, 0]], 0.25);
+    assert_close(pseudo_inverse[[0, 1, 1]], 0.5);
+    assert_close(pseudo_inverse[[1, 0, 0]], 1.0 / 9.0);
+    assert_close(pseudo_inverse[[1, 1, 1]], 1.0 / 3.0);
+
+    let (_, svd_condition) = invoke_udf(
+        &svd_condition_udf,
+        vec![ColumnarValue::Array(Arc::new(svd_matrices.clone()))],
+        vec![Arc::clone(&svd_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_svd_condition_number");
+    assert_close(f64_array(&svd_condition).value(0), 2.0);
+    assert_close(f64_array(&svd_condition).value(1), 3.0);
+
+    let (rank_field, rank_matrices) =
+        matrix_batch("rank", [[[1.0, 0.0], [0.0, 1.0]], [[1.0, 1.0], [1.0, 1.0]]]);
+    let (_, rank) = invoke_udf(
+        &svd_rank_udf,
+        vec![ColumnarValue::Array(Arc::new(rank_matrices))],
+        vec![rank_field],
+        &[None],
+        2,
+    )
+    .expect("matrix_svd_rank");
+    let ColumnarValue::Array(rank) = rank else {
+        panic!("expected rank array output");
+    };
+    let rank = rank.as_any().downcast_ref::<Int64Array>().expect("rank int64");
+    assert_eq!(rank.value(0), 2);
+    assert_eq!(rank.value(1), 1);
 }
 
 #[test]
@@ -1358,7 +1584,7 @@ fn udf_catalog_covers_core_trait_entrypoints() {
 fn vector_udfs_validate_array_and_storage_contracts() {
     let l2_norm_udf = udfs::vector_l2_norm_udf();
     let vector_input = fixed_size_list([[1.0, 2.0, 3.0]]);
-    let vector_field = vector_field("vector", 3, false).expect("vector field");
+    let vector_field = vector_field("vector", &DataType::Float64, 3, false).expect("vector field");
 
     let scalar_error = invoke_udf_error(
         &l2_norm_udf,
@@ -1384,25 +1610,37 @@ fn vector_udfs_validate_array_and_storage_contracts() {
 
     assert!(scalar_error.contains("argument 1 must be an array column"));
     assert!(storage_error.contains("expected FixedSizeListArray storage"));
-    assert!(field_error.contains("expected FixedSizeList<Float64>(D)"));
+    assert!(field_error.contains("expected FixedSizeList<Float32|Float64>(D)"));
 }
 
 #[test]
 fn matrix_udfs_validate_shape_contracts() {
+    let matvec_udf = udfs::matrix_matvec_udf();
     let matmul_udf = udfs::matrix_matmul_udf();
     let lu_udf = udfs::matrix_lu_udf();
     let lu_solve_udf = udfs::matrix_lu_solve_udf();
+    let qr_solve_udf = udfs::matrix_qr_solve_least_squares_udf();
     let (left_field, left) = matrix_batch("left", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
     let (right_field, right) = matrix_batch("right", [[[1.0, 0.0], [0.0, 1.0]]]);
     let (nonsquare_field, nonsquare) =
         matrix_batch("nonsquare", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
     let rhs = fixed_size_list([[1.0, 2.0]]);
-    let rhs_field = vector_field("rhs", 2, false).expect("rhs field");
+    let rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
 
     let matmul_error = invoke_udf_error(
         &matmul_udf,
         vec![ColumnarValue::Array(Arc::new(left)), ColumnarValue::Array(Arc::new(right))],
         vec![left_field, right_field],
+        &[None, None],
+        1,
+    );
+    let matvec_error = invoke_udf_error(
+        &matvec_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(nonsquare.clone())),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+        ],
+        vec![Arc::clone(&nonsquare_field), Arc::clone(&rhs_field)],
         &[None, None],
         1,
     );
@@ -1420,10 +1658,25 @@ fn matrix_udfs_validate_shape_contracts() {
         &[None, None],
         1,
     );
+    let qr_rhs_error = invoke_udf_error(
+        &qr_solve_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrix_batch("qr", [[[1.0, 2.0], [3.0, 4.0]]]).1)),
+            ColumnarValue::Array(Arc::new(fixed_size_list([[1.0, 2.0, 3.0]]))),
+        ],
+        vec![
+            matrix_batch("qr_field", [[[1.0, 2.0], [3.0, 4.0]]]).0,
+            vector_field("rhs_long", &DataType::Float64, 3, false).expect("rhs field"),
+        ],
+        &[None, None],
+        1,
+    );
 
     assert!(matmul_error.contains("incompatible matrix shapes"));
+    assert!(matvec_error.contains("rhs vector length mismatch"));
     assert!(lu_error.contains("matrix_lu requires square matrices"));
     assert!(rhs_error.contains("matrix_lu_solve requires square matrices"));
+    assert!(qr_rhs_error.contains("rhs vector length mismatch"));
 }
 
 #[test]
@@ -1433,11 +1686,12 @@ fn matrix_lu_solve_and_linear_regression_validate_runtime_batch_edges() {
     let (matrices_field, matrices) =
         matrix_batch("matrices", [[[1.0, 0.0], [0.0, 1.0]], [[2.0, 1.0], [1.0, 2.0]]]);
     let short_rhs = fixed_size_list([[1.0, 2.0]]);
-    let short_rhs_field = vector_field("rhs", 2, false).expect("rhs field");
+    let short_rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
     let (design_field, design) =
         matrix_batch("design", [[[1.0, 0.0], [0.0, 1.0]], [[1.0, 1.0], [1.0, 0.0]]]);
     let response = fixed_size_list([[1.0, 2.0]]);
-    let response_field = vector_field("response", 2, false).expect("response field");
+    let response_field =
+        vector_field("response", &DataType::Float64, 2, false).expect("response field");
     let bool_field = Arc::new(Field::new("add_intercept", DataType::Boolean, false));
 
     let lu_solve_error = invoke_udf_error(
@@ -1496,11 +1750,17 @@ fn sparse_and_tensor_udfs_validate_contract_edges() {
     let tensor_sum_udf = udfs::tensor_sum_last_axis_udf();
     let (sparse_field, sparse) = sparse_batch("sparse");
     let (ragged_field, ragged_vectors) = ragged_vectors("vectors", vec![vec![1.0, 2.0], vec![3.0]]);
-    let rank_two_vectors =
-        crate::metadata::variable_shape_tensor_field("vectors", 2, Some(&[None, None]), false)
-            .expect("rank-2 ragged field");
-    let rank_one_tensor = crate::metadata::fixed_shape_tensor_field("tensor", &[4], false)
-        .expect("rank-1 tensor field");
+    let rank_two_vectors = crate::metadata::variable_shape_tensor_field(
+        "vectors",
+        &DataType::Float64,
+        2,
+        Some(&[None, None] as &[Option<i32>]),
+        false,
+    )
+    .expect("rank-2 ragged field");
+    let rank_one_tensor =
+        crate::metadata::fixed_shape_tensor_field("tensor", &DataType::Float64, &[4], false)
+            .expect("rank-1 tensor field");
     let rank_one_tensor_values = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
         vec![Some(vec![Some(1.0), Some(2.0), Some(3.0), Some(4.0)])],
         4,
@@ -1537,4 +1797,648 @@ fn sparse_and_tensor_udfs_validate_contract_edges() {
     assert!(sparse_rank_error.contains("batch of rank-1 dense vectors"));
     assert!(sparse_storage_error.contains("expected StructArray storage"));
     assert!(tensor_rank_error.contains("requires tensors with rank >= 2"));
+}
+
+#[test]
+fn float32_constructor_udfs_reject_invalid_shapes() {
+    let values_field =
+        Arc::new(Field::new("values", DataType::new_list(DataType::Float32, false), false));
+    let int_list_field =
+        Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false));
+    let rows_field = Arc::new(Field::new("rows", DataType::Int64, false));
+    let cols_field = Arc::new(Field::new("cols", DataType::Int64, false));
+    let rank_field = Arc::new(Field::new("rank", DataType::Int64, false));
+    let row_ptrs_field =
+        Arc::new(Field::new("row_ptrs", DataType::new_list(DataType::Int32, false), false));
+    let indices_field =
+        Arc::new(Field::new("indices", DataType::new_list(DataType::UInt32, false), false));
+
+    let matrix_error = invoke_udf_error(
+        &udfs::make_matrix_udf(),
+        vec![
+            ColumnarValue::Scalar(scalar_float32_list(vec![1.0, 2.0, 3.0])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![Arc::clone(&values_field), Arc::clone(&rows_field), Arc::clone(&cols_field)],
+        &[
+            Some(scalar_float32_list(vec![1.0, 2.0, 3.0])),
+            Some(ScalarValue::Int64(Some(2))),
+            Some(ScalarValue::Int64(Some(2))),
+        ],
+        1,
+    );
+    let variable_error = invoke_udf_error(
+        &udfs::make_variable_tensor_udf(),
+        vec![
+            ColumnarValue::Scalar(scalar_float32_list(vec![1.0, 2.0])),
+            ColumnarValue::Scalar(scalar_int32_list(vec![1, 2])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ],
+        vec![Arc::clone(&values_field), Arc::clone(&int_list_field), Arc::clone(&rank_field)],
+        &[
+            Some(scalar_float32_list(vec![1.0, 2.0])),
+            Some(scalar_int32_list(vec![1, 2])),
+            Some(ScalarValue::Int64(Some(1))),
+        ],
+        1,
+    );
+    let csr_error = invoke_udf_error(
+        &udfs::make_csr_matrix_batch_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![vec![2, 2]]))),
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![vec![0, 1, 2], vec![0, 1]]))),
+            ColumnarValue::Array(Arc::new(u32_list_array(vec![vec![0, 1]]))),
+            ColumnarValue::Array(Arc::new(float32_list_array(vec![vec![1.0, 2.0]]))),
+        ],
+        vec![int_list_field, row_ptrs_field, indices_field, values_field],
+        &[None, None, None, None],
+        2,
+    );
+
+    assert!(matrix_error.contains("expected 4 row-major values"));
+    assert!(variable_error.contains("expected rank 1"));
+    assert!(csr_error.contains("argument length mismatch"));
+}
+
+#[test]
+fn float32_tensor_and_sparse_udfs_validate_contract_edges() {
+    let sparse_matvec_udf = udfs::sparse_matvec_udf();
+    let tensor_sum_udf = udfs::tensor_sum_last_axis_udf();
+    let variable_sum_udf = udfs::tensor_variable_sum_last_axis_udf();
+    let (sparse_field, sparse) = sparse_batch_f32("sparse");
+    let (ragged_vectors_field, ragged_vectors) =
+        ragged_vectors_f32("vectors", vec![vec![1.0, 2.0], vec![3.0]]);
+    let rank_two_vectors = crate::metadata::variable_shape_tensor_field(
+        "vectors",
+        &DataType::Float32,
+        2,
+        Some(&[None, None] as &[Option<i32>]),
+        false,
+    )
+    .expect("rank-2 ragged field");
+    let rank_one_tensor =
+        crate::metadata::fixed_shape_tensor_field("tensor", &DataType::Float32, &[4], false)
+            .expect("rank-1 tensor field");
+    let rank_one_tensor_values = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+        vec![Some(vec![Some(1.0), Some(2.0), Some(3.0), Some(4.0)])],
+        4,
+    );
+
+    let sparse_rank_error = invoke_udf_error(
+        &sparse_matvec_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(sparse)),
+            ColumnarValue::Array(Arc::new(ragged_vectors.clone())),
+        ],
+        vec![sparse_field, rank_two_vectors],
+        &[None, None],
+        2,
+    );
+    let tensor_rank_error = invoke_udf_error(
+        &tensor_sum_udf,
+        vec![ColumnarValue::Array(Arc::new(rank_one_tensor_values))],
+        vec![rank_one_tensor],
+        &[None],
+        1,
+    );
+    let variable_rank_error = invoke_udf_error(
+        &variable_sum_udf,
+        vec![ColumnarValue::Array(Arc::new(ragged_vectors))],
+        vec![ragged_vectors_field],
+        &[None],
+        2,
+    );
+
+    assert!(sparse_rank_error.contains("batch of rank-1 dense vectors"));
+    assert!(tensor_rank_error.contains("requires tensors with rank >= 2"));
+    assert!(variable_rank_error.contains("requires tensors with rank >= 2"));
+}
+
+#[test]
+fn dense_constructor_udfs_cover_float32_branches() {
+    let values_field =
+        Arc::new(Field::new("values", DataType::new_list(DataType::Float32, false), false));
+    let nested_values_field = Arc::new(Field::new(
+        "nested_values",
+        DataType::new_list(DataType::new_list(DataType::Float32, false), false),
+        false,
+    ));
+
+    let (vector_field_out, vector_output) = invoke_udf(
+        &udfs::make_vector_udf(),
+        vec![
+            ColumnarValue::Scalar(scalar_float32_list(vec![3.0, 4.0])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![Arc::clone(&values_field), Arc::new(Field::new("dim", DataType::Int64, false))],
+        &[Some(scalar_float32_list(vec![3.0, 4.0])), Some(ScalarValue::Int64(Some(2)))],
+        1,
+    )
+    .expect("make_vector f32");
+    assert_eq!(
+        vector_field_out.data_type(),
+        &DataType::new_fixed_size_list(DataType::Float32, 2, false)
+    );
+    assert_eq!(array_data_type(&vector_output), vector_field_out.data_type());
+
+    let (matrix_field_out, matrix_output) = invoke_udf(
+        &udfs::make_matrix_udf(),
+        vec![
+            ColumnarValue::Scalar(scalar_nested_float32_list(vec![vec![1.0, 2.0], vec![3.0, 4.0]])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::clone(&nested_values_field),
+            Arc::new(Field::new("rows", DataType::Int64, false)),
+            Arc::new(Field::new("cols", DataType::Int64, false)),
+        ],
+        &[
+            Some(scalar_nested_float32_list(vec![vec![1.0, 2.0], vec![3.0, 4.0]])),
+            Some(ScalarValue::Int64(Some(2))),
+            Some(ScalarValue::Int64(Some(2))),
+        ],
+        1,
+    )
+    .expect("make_matrix f32");
+    assert_eq!(array_data_type(&matrix_output), matrix_field_out.data_type());
+
+    let (tensor_field_out, tensor_output) = invoke_udf(
+        &udfs::make_tensor_udf(),
+        vec![
+            ColumnarValue::Scalar(scalar_float32_list(vec![1.0, 2.0, 3.0, 4.0])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::clone(&values_field),
+            Arc::new(Field::new("d0", DataType::Int64, false)),
+            Arc::new(Field::new("d1", DataType::Int64, false)),
+        ],
+        &[
+            Some(scalar_float32_list(vec![1.0, 2.0, 3.0, 4.0])),
+            Some(ScalarValue::Int64(Some(2))),
+            Some(ScalarValue::Int64(Some(2))),
+        ],
+        1,
+    )
+    .expect("make_tensor f32");
+    assert_eq!(array_data_type(&tensor_output), tensor_field_out.data_type());
+}
+
+#[test]
+fn variable_and_sparse_constructor_udfs_cover_float32_branches() {
+    let values_field =
+        Arc::new(Field::new("values", DataType::new_list(DataType::Float32, false), false));
+    let int_list_field =
+        Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false));
+    let u32_list_field =
+        Arc::new(Field::new("indices", DataType::new_list(DataType::UInt32, false), false));
+
+    let (variable_field_out, variable_output) = invoke_udf(
+        &udfs::make_variable_tensor_udf(),
+        vec![
+            ColumnarValue::Scalar(scalar_float32_list(vec![1.0, 2.0, 3.0])),
+            ColumnarValue::Scalar(scalar_int32_list(vec![3])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ],
+        vec![
+            Arc::clone(&values_field),
+            Arc::clone(&int_list_field),
+            Arc::new(Field::new("rank", DataType::Int64, false)),
+        ],
+        &[
+            Some(scalar_float32_list(vec![1.0, 2.0, 3.0])),
+            Some(scalar_int32_list(vec![3])),
+            Some(ScalarValue::Int64(Some(1))),
+        ],
+        1,
+    )
+    .expect("make_variable_tensor f32");
+    assert_eq!(array_data_type(&variable_output), variable_field_out.data_type());
+
+    let (csr_field_out, csr_output) = invoke_udf(
+        &udfs::make_csr_matrix_batch_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![vec![2, 2]]))),
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![vec![0, 1, 2]]))),
+            ColumnarValue::Array(Arc::new(u32_list_array(vec![vec![0, 1]]))),
+            ColumnarValue::Array(Arc::new(float32_list_array(vec![vec![5.0, 6.0]]))),
+        ],
+        vec![
+            Arc::clone(&int_list_field),
+            Arc::new(Field::new("row_ptrs", DataType::new_list(DataType::Int32, false), false)),
+            u32_list_field,
+            values_field,
+        ],
+        &[None, None, None, None],
+        1,
+    )
+    .expect("make_csr_matrix_batch f32");
+    assert_eq!(array_data_type(&csr_output), csr_field_out.data_type());
+}
+
+#[test]
+fn float32_constructor_udfs_cover_flat_and_empty_paths() {
+    let values_field =
+        Arc::new(Field::new("values", DataType::new_list(DataType::Float32, false), false));
+    let int_list_field =
+        Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false));
+    let u32_list_field =
+        Arc::new(Field::new("indices", DataType::new_list(DataType::UInt32, false), false));
+
+    let (matrix_field_out, matrix_output) = invoke_udf(
+        &udfs::make_matrix_udf(),
+        vec![
+            ColumnarValue::Scalar(scalar_float32_list(vec![1.0, 2.0, 3.0, 4.0])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::clone(&values_field),
+            Arc::new(Field::new("rows", DataType::Int64, false)),
+            Arc::new(Field::new("cols", DataType::Int64, false)),
+        ],
+        &[
+            Some(scalar_float32_list(vec![1.0, 2.0, 3.0, 4.0])),
+            Some(ScalarValue::Int64(Some(2))),
+            Some(ScalarValue::Int64(Some(2))),
+        ],
+        1,
+    )
+    .expect("make_matrix flat f32");
+    assert_eq!(array_data_type(&matrix_output), matrix_field_out.data_type());
+
+    let (variable_field_out, variable_output) = invoke_udf(
+        &udfs::make_variable_tensor_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(float32_list_array(vec![]))),
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![]))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ],
+        vec![
+            Arc::clone(&values_field),
+            Arc::clone(&int_list_field),
+            Arc::new(Field::new("rank", DataType::Int64, false)),
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(1)))],
+        0,
+    )
+    .expect("make_variable_tensor empty f32");
+    assert_eq!(array_data_type(&variable_output), variable_field_out.data_type());
+
+    let (csr_field_out, csr_output) = invoke_udf(
+        &udfs::make_csr_matrix_batch_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![]))),
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![]))),
+            ColumnarValue::Array(Arc::new(u32_list_array(vec![]))),
+            ColumnarValue::Array(Arc::new(float32_list_array(vec![]))),
+        ],
+        vec![
+            int_list_field,
+            Arc::new(Field::new("row_ptrs", DataType::new_list(DataType::Int32, false), false)),
+            u32_list_field,
+            values_field,
+        ],
+        &[None, None, None, None],
+        0,
+    )
+    .expect("make_csr_matrix_batch empty f32");
+    assert_eq!(array_data_type(&csr_output), csr_field_out.data_type());
+}
+
+#[test]
+fn vector_udfs_cover_float32_branches() {
+    let vectors = fixed_size_list_f32([[3.0, 4.0], [5.0, 12.0]]);
+    let other = fixed_size_list_f32([[1.0, 2.0], [2.0, 1.0]]);
+    let vector_field = vector_field("vector", &DataType::Float32, 2, false).expect("vector field");
+
+    let (_norm_field, norm_output) = invoke_udf(
+        &udfs::vector_l2_norm_udf(),
+        vec![ColumnarValue::Array(Arc::new(vectors.clone()))],
+        vec![Arc::clone(&vector_field)],
+        &[None],
+        2,
+    )
+    .expect("vector_l2_norm f32");
+    assert!((f32_array(&norm_output).value(0) - 5.0_f32).abs() < 1.0e-6_f32);
+
+    let (_dot_field, dot_output) = invoke_udf(
+        &udfs::vector_dot_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(vectors.clone())),
+            ColumnarValue::Array(Arc::new(other.clone())),
+        ],
+        vec![Arc::clone(&vector_field), Arc::clone(&vector_field)],
+        &[None, None],
+        2,
+    )
+    .expect("vector_dot f32");
+    assert!((f32_array(&dot_output).value(0) - 11.0_f32).abs() < 1.0e-6_f32);
+
+    let (_cos_field, cos_output) = invoke_udf(
+        &udfs::vector_cosine_similarity_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(vectors.clone())),
+            ColumnarValue::Array(Arc::new(other.clone())),
+        ],
+        vec![Arc::clone(&vector_field), Arc::clone(&vector_field)],
+        &[None, None],
+        2,
+    )
+    .expect("vector_cosine_similarity f32");
+    assert!(f32_array(&cos_output).value(0) > 0.0);
+
+    let (_distance_field, distance_output) = invoke_udf(
+        &udfs::vector_cosine_distance_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(vectors.clone())),
+            ColumnarValue::Array(Arc::new(other)),
+        ],
+        vec![Arc::clone(&vector_field), Arc::clone(&vector_field)],
+        &[None, None],
+        2,
+    )
+    .expect("vector_cosine_distance f32");
+    assert!(f32_array(&distance_output).value(0) >= 0.0);
+
+    let (normalize_field, normalize_output) = invoke_udf(
+        &udfs::vector_normalize_udf(),
+        vec![ColumnarValue::Array(Arc::new(vectors))],
+        vec![vector_field],
+        &[None],
+        2,
+    )
+    .expect("vector_normalize f32");
+    assert_eq!(array_data_type(&normalize_output), normalize_field.data_type());
+}
+
+#[test]
+fn matrix_and_decomposition_udfs_cover_float32_branches() {
+    let (matrix_field, matrices) = matrix_batch_f32("matrix", [[[4.0, 1.0], [1.0, 3.0]]]);
+    let rhs_field = vector_field("rhs", &DataType::Float32, 2, false).expect("rhs field");
+    let rhs = fixed_size_list_f32([[1.0, 2.0]]);
+
+    let (matmul_field, matmul_output) = invoke_udf(
+        &udfs::matrix_matmul_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+        ],
+        vec![Arc::clone(&matrix_field), Arc::clone(&matrix_field)],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_matmul f32");
+    assert_eq!(array_data_type(&matmul_output), matmul_field.data_type());
+
+    let (matvec_field, matvec_output) = invoke_udf(
+        &udfs::matrix_matvec_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+        ],
+        vec![Arc::clone(&matrix_field), Arc::clone(&rhs_field)],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_matvec f32");
+    assert_eq!(array_data_type(&matvec_output), matvec_field.data_type());
+
+    let (solve_field, solve_output) = invoke_udf(
+        &udfs::matrix_lu_solve_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+        ],
+        vec![Arc::clone(&matrix_field), Arc::clone(&rhs_field)],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_lu_solve f32");
+    assert_eq!(array_data_type(&solve_output), solve_field.data_type());
+
+    let (cholesky_solve_field, cholesky_solve_output) = invoke_udf(
+        &udfs::matrix_cholesky_solve_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+        ],
+        vec![Arc::clone(&matrix_field), Arc::clone(&rhs_field)],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_cholesky_solve f32");
+    assert_eq!(array_data_type(&cholesky_solve_output), cholesky_solve_field.data_type());
+
+    for udf in [
+        udfs::matrix_lu_udf(),
+        udfs::matrix_inverse_udf(),
+        udfs::matrix_determinant_udf(),
+        udfs::matrix_log_determinant_udf(),
+        udfs::matrix_cholesky_udf(),
+        udfs::matrix_cholesky_inverse_udf(),
+        udfs::matrix_qr_udf(),
+        udfs::matrix_svd_udf(),
+        udfs::matrix_qr_condition_number_udf(),
+        udfs::matrix_svd_pseudo_inverse_udf(),
+        udfs::matrix_svd_condition_number_udf(),
+        udfs::matrix_svd_rank_udf(),
+    ] {
+        let (_field, output) = invoke_udf(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+            vec![Arc::clone(&matrix_field)],
+            &[None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        match output {
+            ColumnarValue::Array(_) => {}
+            ColumnarValue::Scalar(_) => panic!("expected array output"),
+        }
+    }
+    let (_field, output) = invoke_udf(
+        &udfs::matrix_qr_solve_least_squares_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices.clone())), ColumnarValue::Array(Arc::new(rhs))],
+        vec![matrix_field, rhs_field],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_qr_solve_least_squares f32");
+    match output {
+        ColumnarValue::Array(_) => {}
+        ColumnarValue::Scalar(_) => panic!("expected array output"),
+    }
+}
+
+#[test]
+fn tensor_udfs_cover_float32_branches() {
+    let (tensor_field, tensors) =
+        tensor_batch4_f32("tensor", [[[[1.0, 2.0], [3.0, 4.0]], [[2.0, 1.0], [0.0, 1.0]]]]);
+    let (ragged_matrix_field, ragged_matrices) =
+        ragged_matrices_f32("matrices", vec![vec![vec![1.0, 2.0], vec![3.0, 4.0]]]);
+
+    for udf in [
+        udfs::tensor_sum_last_axis_udf(),
+        udfs::tensor_l2_norm_last_axis_udf(),
+        udfs::tensor_normalize_last_axis_udf(),
+    ] {
+        let (_field, output) = invoke_udf(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(tensors.clone()))],
+            vec![Arc::clone(&tensor_field)],
+            &[None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        match output {
+            ColumnarValue::Array(_) => {}
+            ColumnarValue::Scalar(_) => panic!("expected array output"),
+        }
+    }
+
+    let (_field, _output) = invoke_udf(
+        &udfs::tensor_batched_dot_last_axis_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(tensors.clone())),
+            ColumnarValue::Array(Arc::new(tensors.clone())),
+        ],
+        vec![Arc::clone(&tensor_field), Arc::clone(&tensor_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor batched dot f32");
+    let (_field, _output) = invoke_udf(
+        &udfs::tensor_batched_matmul_last_two_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(tensors.clone())),
+            ColumnarValue::Array(Arc::new(tensors)),
+        ],
+        vec![Arc::clone(&tensor_field), Arc::clone(&tensor_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor batched matmul f32");
+
+    for udf in [
+        udfs::tensor_variable_sum_last_axis_udf(),
+        udfs::tensor_variable_l2_norm_last_axis_udf(),
+        udfs::tensor_variable_normalize_last_axis_udf(),
+    ] {
+        let (_field, _output) = invoke_udf(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(ragged_matrices.clone()))],
+            vec![Arc::clone(&ragged_matrix_field)],
+            &[None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+    }
+    let (_field, _output) = invoke_udf(
+        &udfs::tensor_variable_batched_dot_last_axis_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(ragged_matrices.clone())),
+            ColumnarValue::Array(Arc::new(ragged_matrices)),
+        ],
+        vec![Arc::clone(&ragged_matrix_field), Arc::clone(&ragged_matrix_field)],
+        &[None, None],
+        1,
+    )
+    .expect("variable tensor batched dot f32");
+}
+
+#[test]
+fn sparse_udfs_cover_float32_branches() {
+    let (ragged_vector_field, ragged_vectors) =
+        ragged_vectors_f32("vectors", vec![vec![1.0, 2.0, 3.0], vec![3.0, 4.0]]);
+    let (dense_field, dense_matrices) = ragged_matrices_f32("dense", vec![
+        vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]],
+        vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+    ]);
+    let (sparse_field, sparse) = sparse_batch_f32("sparse");
+    let (sparse_rhs_field, sparse_rhs) = sparse_batch_rhs_f32("sparse_rhs");
+    for udf in [
+        udfs::sparse_matvec_udf(),
+        udfs::sparse_matmat_dense_udf(),
+        udfs::sparse_transpose_udf(),
+        udfs::sparse_matmat_sparse_udf(),
+    ] {
+        let args = if udf.name() == "sparse_matvec" {
+            vec![
+                ColumnarValue::Array(Arc::new(sparse.clone())),
+                ColumnarValue::Array(Arc::new(ragged_vectors.clone())),
+            ]
+        } else if udf.name() == "sparse_matmat_dense" {
+            vec![
+                ColumnarValue::Array(Arc::new(sparse.clone())),
+                ColumnarValue::Array(Arc::new(dense_matrices.clone())),
+            ]
+        } else if udf.name() == "sparse_transpose" {
+            vec![ColumnarValue::Array(Arc::new(sparse.clone()))]
+        } else {
+            vec![
+                ColumnarValue::Array(Arc::new(sparse.clone())),
+                ColumnarValue::Array(Arc::new(sparse_rhs.clone())),
+            ]
+        };
+        let fields = if udf.name() == "sparse_matvec" {
+            vec![Arc::clone(&sparse_field), Arc::clone(&ragged_vector_field)]
+        } else if udf.name() == "sparse_matmat_dense" {
+            vec![Arc::clone(&sparse_field), Arc::clone(&dense_field)]
+        } else if udf.name() == "sparse_transpose" {
+            vec![Arc::clone(&sparse_field)]
+        } else {
+            vec![Arc::clone(&sparse_field), Arc::clone(&sparse_rhs_field)]
+        };
+        let (_field, _output) = invoke_udf(&udf, args, fields, &[None, None], 2)
+            .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+    }
+}
+
+#[test]
+fn ml_udfs_cover_float32_branches() {
+    let (matrix_field, matrices) =
+        matrix_batch_f32("design", [[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]]);
+    let response_field =
+        vector_field("response", &DataType::Float32, 3, false).expect("response field");
+    let responses = fixed_size_list_f32([[1.0, 2.0, 3.0]]);
+    let bool_field = Arc::new(Field::new("add_intercept", DataType::Boolean, false));
+
+    for udf in [
+        udfs::matrix_column_means_udf(),
+        udfs::matrix_center_columns_udf(),
+        udfs::matrix_covariance_udf(),
+        udfs::matrix_correlation_udf(),
+        udfs::matrix_pca_udf(),
+    ] {
+        let (_field, output) = invoke_udf(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+            vec![Arc::clone(&matrix_field)],
+            &[None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        match output {
+            ColumnarValue::Array(_) => {}
+            ColumnarValue::Scalar(_) => panic!("expected array output"),
+        }
+    }
+
+    let (regression_field, regression_output) = invoke_udf(
+        &udfs::linear_regression_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices)),
+            ColumnarValue::Array(Arc::new(responses)),
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))),
+        ],
+        vec![matrix_field, response_field, bool_field],
+        &[None, None, Some(ScalarValue::Boolean(Some(true)))],
+        1,
+    )
+    .expect("linear_regression f32");
+    assert_eq!(array_data_type(&regression_output), regression_field.data_type());
 }

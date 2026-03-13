@@ -2531,9 +2531,11 @@ dependencies = [
  "datafusion",
  "nabled",
  "ndarray",
+ "ndarray-linalg",
  "ndarrow",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

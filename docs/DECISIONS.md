@@ -64,6 +64,9 @@
 29. The first constructor surface is explicit `make_*` scalar UDFs over SQL `List` values plus
     scalar dimensions or shape lists; planner sugar and alternate constructor syntax are deferred
     until the base contracts stabilize.
+30. `ndatafusion` remains git-consumed until DataFusion has a published Arrow-58-compatible
+    crates.io release. README install guidance, crate docs, and publish checklists must not imply
+    crates.io availability while the `datafusion` dependency is still pinned to git.
 
 ## Cross-Layer Contract Model
 

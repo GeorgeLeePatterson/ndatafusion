@@ -34,8 +34,10 @@ This folder contains the current, authoritative direction for `ndatafusion`.
 1. `docs/DECISIONS.md`: locked architectural decisions and constraints.
 2. `docs/CAPABILITY_MATRIX.md`: capability inventory, gap map, and v1 sufficiency verdict.
 3. `docs/EXECUTION_TRACKER.md`: canonical `Done / Next / Needed` tracker for continuation.
-4. `docs/ARCHITECTURE.md`: end-to-end implementation plan from scaffold to v1 publish.
-5. `docs/STATUS.md`: current repository snapshot and next required milestone.
+4. `docs/PUBLISH_CHECKLIST.md`: release gate, docs.rs posture, release-note minimums, and current
+   publication blockers.
+5. `docs/ARCHITECTURE.md`: end-to-end implementation plan from scaffold to v1 publish.
+6. `docs/STATUS.md`: current repository snapshot and next required milestone.
 
 ## Context Resume Protocol
 
@@ -45,8 +47,9 @@ When starting from a compacted or partial context, read documents in this order:
 2. `docs/DECISIONS.md`
 3. `docs/CAPABILITY_MATRIX.md`
 4. `docs/EXECUTION_TRACKER.md`
-5. `docs/ARCHITECTURE.md`
-6. `docs/STATUS.md`
+5. `docs/PUBLISH_CHECKLIST.md` when release, docs.rs, or publish posture is relevant
+6. `docs/ARCHITECTURE.md`
+7. `docs/STATUS.md`
 
 Use `docs/EXECUTION_TRACKER.md` to resume from `Next` items first. Avoid a full repository
 re-assessment unless tracker state is stale or contradictory.

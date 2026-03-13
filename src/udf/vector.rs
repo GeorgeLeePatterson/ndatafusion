@@ -1,49 +1,62 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::types::Float64Type;
+use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::array::{FixedSizeListArray, PrimitiveArray};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
 };
+use nabled::core::prelude::NabledReal;
+use ndarrow::NdarrowElement;
 
 use super::common::{expect_fixed_size_list_arg, map_arrow_error, nullable_or};
-use crate::metadata::{float64_scalar_field, parse_float64_vector_field, vector_field};
-use crate::signatures::float64_vector_signature;
+use crate::error::exec_error;
+use crate::metadata::{parse_vector_field, scalar_field, vector_field};
+use crate::signatures::any_signature;
 
-fn invoke_unary_scalar(
+fn invoke_unary_scalar<T>(
     args: &ScalarFunctionArgs,
     function_name: &str,
-    op: impl FnOnce(
-        &FixedSizeListArray,
-    ) -> Result<PrimitiveArray<Float64Type>, nabled::arrow::ArrowInteropError>,
-) -> Result<ColumnarValue> {
+    op: impl FnOnce(&FixedSizeListArray) -> Result<PrimitiveArray<T>, nabled::arrow::ArrowInteropError>,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement,
+{
     let rows = expect_fixed_size_list_arg(args, 1, function_name)?;
     let output = op(rows).map_err(|error| map_arrow_error(function_name, error))?;
     Ok(ColumnarValue::Array(Arc::new(output)))
 }
 
-fn invoke_binary_scalar(
+fn invoke_binary_scalar<T>(
     args: &ScalarFunctionArgs,
     function_name: &str,
     op: impl FnOnce(
         &FixedSizeListArray,
         &FixedSizeListArray,
-    ) -> Result<PrimitiveArray<Float64Type>, nabled::arrow::ArrowInteropError>,
-) -> Result<ColumnarValue> {
+    ) -> Result<PrimitiveArray<T>, nabled::arrow::ArrowInteropError>,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement,
+{
     let left = expect_fixed_size_list_arg(args, 1, function_name)?;
     let right = expect_fixed_size_list_arg(args, 2, function_name)?;
     let output = op(left, right).map_err(|error| map_arrow_error(function_name, error))?;
     Ok(ColumnarValue::Array(Arc::new(output)))
 }
 
-fn invoke_unary_vector(
+fn invoke_unary_vector<T>(
     args: &ScalarFunctionArgs,
     function_name: &str,
     op: impl FnOnce(&FixedSizeListArray) -> Result<FixedSizeListArray, nabled::arrow::ArrowInteropError>,
-) -> Result<ColumnarValue> {
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement,
+{
     let rows = expect_fixed_size_list_arg(args, 1, function_name)?;
     let output = op(rows).map_err(|error| map_arrow_error(function_name, error))?;
     Ok(ColumnarValue::Array(Arc::new(output)))
@@ -55,7 +68,7 @@ struct VectorL2Norm {
 }
 
 impl VectorL2Norm {
-    fn new() -> Self { Self { signature: float64_vector_signature(1) } }
+    fn new() -> Self { Self { signature: any_signature(1) } }
 }
 
 impl ScalarUDFImpl for VectorL2Norm {
@@ -70,14 +83,22 @@ impl ScalarUDFImpl for VectorL2Norm {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let _ = parse_float64_vector_field(&args.arg_fields[0], self.name(), 1)?;
-        Ok(float64_scalar_field(self.name(), args.arg_fields[0].is_nullable()))
+        let contract = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        Ok(scalar_field(self.name(), &contract.value_type, args.arg_fields[0].is_nullable()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        invoke_unary_scalar(&args, self.name(), |rows| {
-            nabled::arrow::vector::batched_l2_norm::<Float64Type>(rows)
-        })
+        match parse_vector_field(&args.arg_fields[0], self.name(), 1)?.value_type {
+            DataType::Float32 => invoke_unary_scalar::<Float32Type>(&args, self.name(), |rows| {
+                nabled::arrow::vector::batched_l2_norm::<Float32Type>(rows)
+            }),
+            DataType::Float64 => invoke_unary_scalar::<Float64Type>(&args, self.name(), |rows| {
+                nabled::arrow::vector::batched_l2_norm::<Float64Type>(rows)
+            }),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported vector value type {actual}")))
+            }
+        }
     }
 }
 
@@ -87,7 +108,7 @@ struct VectorDot {
 }
 
 impl VectorDot {
-    fn new() -> Self { Self { signature: float64_vector_signature(2) } }
+    fn new() -> Self { Self { signature: any_signature(2) } }
 }
 
 impl ScalarUDFImpl for VectorDot {
@@ -102,15 +123,47 @@ impl ScalarUDFImpl for VectorDot {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let _ = parse_float64_vector_field(&args.arg_fields[0], self.name(), 1)?;
-        let _ = parse_float64_vector_field(&args.arg_fields[1], self.name(), 2)?;
-        Ok(float64_scalar_field(self.name(), nullable_or(args.arg_fields)))
+        let left = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "vector value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        Ok(scalar_field(self.name(), &left.value_type, nullable_or(args.arg_fields)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        invoke_binary_scalar(&args, self.name(), |left, right| {
-            nabled::arrow::vector::batched_dot::<Float64Type>(left, right)
-        })
+        let left = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "vector value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        match left.value_type {
+            DataType::Float32 => {
+                invoke_binary_scalar::<Float32Type>(&args, self.name(), |lhs, rhs| {
+                    nabled::arrow::vector::batched_dot::<Float32Type>(lhs, rhs)
+                })
+            }
+            DataType::Float64 => {
+                invoke_binary_scalar::<Float64Type>(&args, self.name(), |lhs, rhs| {
+                    nabled::arrow::vector::batched_dot::<Float64Type>(lhs, rhs)
+                })
+            }
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported vector value type {actual}")))
+            }
+        }
     }
 }
 
@@ -120,7 +173,7 @@ struct VectorCosineSimilarity {
 }
 
 impl VectorCosineSimilarity {
-    fn new() -> Self { Self { signature: float64_vector_signature(2) } }
+    fn new() -> Self { Self { signature: any_signature(2) } }
 }
 
 impl ScalarUDFImpl for VectorCosineSimilarity {
@@ -135,15 +188,47 @@ impl ScalarUDFImpl for VectorCosineSimilarity {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let _ = parse_float64_vector_field(&args.arg_fields[0], self.name(), 1)?;
-        let _ = parse_float64_vector_field(&args.arg_fields[1], self.name(), 2)?;
-        Ok(float64_scalar_field(self.name(), nullable_or(args.arg_fields)))
+        let left = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "vector value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        Ok(scalar_field(self.name(), &left.value_type, nullable_or(args.arg_fields)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        invoke_binary_scalar(&args, self.name(), |left, right| {
-            nabled::arrow::vector::batched_cosine_similarity::<Float64Type>(left, right)
-        })
+        let left = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "vector value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        match left.value_type {
+            DataType::Float32 => {
+                invoke_binary_scalar::<Float32Type>(&args, self.name(), |lhs, rhs| {
+                    nabled::arrow::vector::batched_cosine_similarity::<Float32Type>(lhs, rhs)
+                })
+            }
+            DataType::Float64 => {
+                invoke_binary_scalar::<Float64Type>(&args, self.name(), |lhs, rhs| {
+                    nabled::arrow::vector::batched_cosine_similarity::<Float64Type>(lhs, rhs)
+                })
+            }
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported vector value type {actual}")))
+            }
+        }
     }
 }
 
@@ -153,7 +238,7 @@ struct VectorCosineDistance {
 }
 
 impl VectorCosineDistance {
-    fn new() -> Self { Self { signature: float64_vector_signature(2) } }
+    fn new() -> Self { Self { signature: any_signature(2) } }
 }
 
 impl ScalarUDFImpl for VectorCosineDistance {
@@ -168,15 +253,47 @@ impl ScalarUDFImpl for VectorCosineDistance {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let _ = parse_float64_vector_field(&args.arg_fields[0], self.name(), 1)?;
-        let _ = parse_float64_vector_field(&args.arg_fields[1], self.name(), 2)?;
-        Ok(float64_scalar_field(self.name(), nullable_or(args.arg_fields)))
+        let left = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "vector value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        Ok(scalar_field(self.name(), &left.value_type, nullable_or(args.arg_fields)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        invoke_binary_scalar(&args, self.name(), |left, right| {
-            nabled::arrow::vector::batched_cosine_distance::<Float64Type>(left, right)
-        })
+        let left = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "vector value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        match left.value_type {
+            DataType::Float32 => {
+                invoke_binary_scalar::<Float32Type>(&args, self.name(), |lhs, rhs| {
+                    nabled::arrow::vector::batched_cosine_distance::<Float32Type>(lhs, rhs)
+                })
+            }
+            DataType::Float64 => {
+                invoke_binary_scalar::<Float64Type>(&args, self.name(), |lhs, rhs| {
+                    nabled::arrow::vector::batched_cosine_distance::<Float64Type>(lhs, rhs)
+                })
+            }
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported vector value type {actual}")))
+            }
+        }
     }
 }
 
@@ -186,7 +303,7 @@ struct VectorNormalize {
 }
 
 impl VectorNormalize {
-    fn new() -> Self { Self { signature: float64_vector_signature(1) } }
+    fn new() -> Self { Self { signature: any_signature(1) } }
 }
 
 impl ScalarUDFImpl for VectorNormalize {
@@ -201,14 +318,27 @@ impl ScalarUDFImpl for VectorNormalize {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let len = parse_float64_vector_field(&args.arg_fields[0], self.name(), 1)?;
-        vector_field(self.name(), len, args.arg_fields[0].is_nullable())
+        let contract = parse_vector_field(&args.arg_fields[0], self.name(), 1)?;
+        vector_field(
+            self.name(),
+            &contract.value_type,
+            contract.len,
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        invoke_unary_vector(&args, self.name(), |rows| {
-            nabled::arrow::vector::batched_normalize::<Float64Type>(rows)
-        })
+        match parse_vector_field(&args.arg_fields[0], self.name(), 1)?.value_type {
+            DataType::Float32 => invoke_unary_vector::<Float32Type>(&args, self.name(), |rows| {
+                nabled::arrow::vector::batched_normalize::<Float32Type>(rows)
+            }),
+            DataType::Float64 => invoke_unary_vector::<Float64Type>(&args, self.name(), |rows| {
+                nabled::arrow::vector::batched_normalize::<Float64Type>(rows)
+            }),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported vector value type {actual}")))
+            }
+        }
     }
 }
 

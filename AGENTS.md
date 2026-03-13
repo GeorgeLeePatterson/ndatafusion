@@ -20,8 +20,9 @@ Before making architectural or broad refactor changes, read these in order:
 2. `docs/DECISIONS.md`
 3. `docs/CAPABILITY_MATRIX.md`
 4. `docs/EXECUTION_TRACKER.md`
-5. `docs/ARCHITECTURE.md`
-6. `docs/STATUS.md`
+5. `docs/PUBLISH_CHECKLIST.md` when release, docs.rs, or publish posture is relevant
+6. `docs/ARCHITECTURE.md`
+7. `docs/STATUS.md`
 
 Do not infer status from memory. Use:
 
@@ -106,7 +107,9 @@ When architecture or behavior changes, update docs in the same change set:
 4. `docs/CAPABILITY_MATRIX.md` for scope and sufficiency updates.
 5. `docs/ARCHITECTURE.md` if the target design or sequencing changes.
 6. `docs/DECISIONS.md` when assumptions or constraints are locked or changed.
-7. Relevant rustdoc comments for API contract changes.
+7. `docs/PUBLISH_CHECKLIST.md` when release posture, docs.rs assumptions, or publish blockers
+   change.
+8. Relevant rustdoc comments for API contract changes.
 
 ## Reference Sources
 

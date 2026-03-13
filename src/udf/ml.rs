@@ -2,62 +2,71 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::StructArray;
+use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
 };
-use ndarray::{Array1, Array2, Array3, Axis};
-use ndarrow::IntoArrow;
+use nabled::core::prelude::NabledReal;
+use ndarray::{Array1, Array2, Array3, ArrayView2, ArrayView3, Axis};
+use ndarrow::NdarrowElement;
 
 use super::common::{
     expect_bool_scalar_arg, expect_bool_scalar_argument, expect_fixed_size_list_arg,
-    fixed_shape_tensor_view3_f64, fixed_size_list_view2_f64, nullable_or,
+    fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows, fixed_size_list_view2,
+    nullable_or, primitive_array_from_values,
 };
 use crate::error::exec_error;
 use crate::metadata::{
-    fixed_shape_tensor_field, float64_scalar_field, parse_float64_matrix_batch_field,
-    parse_float64_vector_field, struct_field, vector_field,
+    MatrixBatchContract, fixed_shape_tensor_field, parse_matrix_batch_field, parse_vector_field,
+    scalar_field, struct_field, vector_field,
 };
 use crate::signatures::any_signature;
 
-fn invoke_matrix_batch_to_vector_output(
+fn invoke_matrix_batch_to_vector_output<T, E>(
     args: &ScalarFunctionArgs,
     function_name: &str,
-    op: impl Fn(
-        &ndarray::ArrayView2<'_, f64>,
-    ) -> std::result::Result<Array1<f64>, datafusion::common::DataFusionError>,
-) -> Result<ColumnarValue> {
+    op: impl Fn(&ArrayView2<'_, T::Native>) -> std::result::Result<Array1<T::Native>, E>,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + ndarray_linalg::Lapack<Real = T::Native>,
+    E: std::fmt::Display,
+{
     let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
-    let matrix_view = fixed_shape_tensor_view3_f64(&args.arg_fields[0], matrices, function_name)?;
+    let matrix_view = fixed_shape_tensor_view3::<T>(&args.arg_fields[0], matrices, function_name)?;
     let batch = matrix_view.len_of(Axis(0));
     let cols = matrix_view.len_of(Axis(2));
     let mut output = Vec::with_capacity(batch * cols);
     for row in 0..batch {
-        let values = op(&matrix_view.index_axis(Axis(0), row))?;
+        let values = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
         output.extend(values.iter().copied());
     }
-    let output = Array2::from_shape_vec((batch, cols), output)
-        .map_err(|error| exec_error(function_name, error))?;
-    let output = output.into_arrow().map_err(|error| exec_error(function_name, error))?;
+    let output = fixed_size_list_array_from_flat_rows::<T>(function_name, batch, cols, &output)?;
     Ok(ColumnarValue::Array(Arc::new(output)))
 }
 
-fn invoke_matrix_batch_to_tensor_output(
+fn invoke_matrix_batch_to_tensor_output<T, E>(
     args: &ScalarFunctionArgs,
     function_name: &str,
     output_rows: usize,
     output_cols: usize,
-    op: impl Fn(
-        &ndarray::ArrayView2<'_, f64>,
-    ) -> std::result::Result<Array2<f64>, datafusion::common::DataFusionError>,
-) -> Result<ColumnarValue> {
+    op: impl Fn(&ArrayView2<'_, T::Native>) -> std::result::Result<Array2<T::Native>, E>,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + ndarray_linalg::Lapack<Real = T::Native>,
+    E: std::fmt::Display,
+{
     let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
-    let matrix_view = fixed_shape_tensor_view3_f64(&args.arg_fields[0], matrices, function_name)?;
+    let matrix_view = fixed_shape_tensor_view3::<T>(&args.arg_fields[0], matrices, function_name)?;
     let batch = matrix_view.len_of(Axis(0));
     let mut output = Vec::with_capacity(batch * output_rows * output_cols);
     for row in 0..batch {
-        let values = op(&matrix_view.index_axis(Axis(0), row))?;
+        let values = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
         output.extend(values.iter().copied());
     }
     let output = Array3::from_shape_vec((batch, output_rows, output_cols), output)
@@ -65,6 +74,257 @@ fn invoke_matrix_batch_to_tensor_output(
     let (_field, output) = ndarrow::arrayd_to_fixed_shape_tensor(function_name, output.into_dyn())
         .map_err(|error| exec_error(function_name, error))?;
     Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+struct PcaOutputs<T> {
+    batch:                           usize,
+    components_values:               Vec<T>,
+    explained_variance_values:       Vec<T>,
+    explained_variance_ratio_values: Vec<T>,
+    mean_values:                     Vec<T>,
+    scores_values:                   Vec<T>,
+}
+
+fn collect_pca_outputs<T>(
+    function_name: &str,
+    matrix_view: &ArrayView3<'_, T::Native>,
+) -> Result<PcaOutputs<T::Native>>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + ndarray_linalg::Lapack<Real = T::Native>,
+{
+    let batch = matrix_view.len_of(Axis(0));
+    let rows = matrix_view.len_of(Axis(1));
+    let cols = matrix_view.len_of(Axis(2));
+    let keep = rows.min(cols);
+    let mut outputs = PcaOutputs {
+        batch,
+        components_values: Vec::with_capacity(batch * keep * cols),
+        explained_variance_values: Vec::with_capacity(batch * keep),
+        explained_variance_ratio_values: Vec::with_capacity(batch * keep),
+        mean_values: Vec::with_capacity(batch * cols),
+        scores_values: Vec::with_capacity(batch * rows * keep),
+    };
+    for row in 0..batch {
+        let result = nabled::ml::pca::compute_pca_view(&matrix_view.index_axis(Axis(0), row), None)
+            .map_err(|error| exec_error(function_name, error))?;
+        outputs.components_values.extend(result.components.iter().copied());
+        outputs.explained_variance_values.extend(result.explained_variance.iter().copied());
+        outputs
+            .explained_variance_ratio_values
+            .extend(result.explained_variance_ratio.iter().copied());
+        outputs.mean_values.extend(result.mean.iter().copied());
+        outputs.scores_values.extend(result.scores.iter().copied());
+    }
+    Ok(outputs)
+}
+
+fn build_pca_struct_array<T>(
+    function_name: &str,
+    matrix: &MatrixBatchContract,
+    outputs: PcaOutputs<T::Native>,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement,
+{
+    let keep = matrix.rows.min(matrix.cols);
+    let components =
+        Array3::from_shape_vec((outputs.batch, keep, matrix.cols), outputs.components_values)
+            .map_err(|error| exec_error(function_name, error))?;
+    let (_components_field, components) =
+        ndarrow::arrayd_to_fixed_shape_tensor("components", components.into_dyn())
+            .map_err(|error| exec_error(function_name, error))?;
+    let explained_variance = fixed_size_list_array_from_flat_rows::<T>(
+        function_name,
+        outputs.batch,
+        keep,
+        &outputs.explained_variance_values,
+    )?;
+    let explained_variance_ratio = fixed_size_list_array_from_flat_rows::<T>(
+        function_name,
+        outputs.batch,
+        keep,
+        &outputs.explained_variance_ratio_values,
+    )?;
+    let mean = fixed_size_list_array_from_flat_rows::<T>(
+        function_name,
+        outputs.batch,
+        matrix.cols,
+        &outputs.mean_values,
+    )?;
+    let scores = Array3::from_shape_vec((outputs.batch, matrix.rows, keep), outputs.scores_values)
+        .map_err(|error| exec_error(function_name, error))?;
+    let (_scores_field, scores) =
+        ndarrow::arrayd_to_fixed_shape_tensor("scores", scores.into_dyn())
+            .map_err(|error| exec_error(function_name, error))?;
+    let struct_array = StructArray::new(
+        vec![
+            fixed_shape_tensor_field(
+                "components",
+                &matrix.value_type,
+                &[keep, matrix.cols],
+                false,
+            )?,
+            vector_field("explained_variance", &matrix.value_type, keep, false)?,
+            vector_field("explained_variance_ratio", &matrix.value_type, keep, false)?,
+            vector_field("mean", &matrix.value_type, matrix.cols, false)?,
+            fixed_shape_tensor_field("scores", &matrix.value_type, &[matrix.rows, keep], false)?,
+        ]
+        .into(),
+        vec![
+            Arc::new(components),
+            Arc::new(explained_variance),
+            Arc::new(explained_variance_ratio),
+            Arc::new(mean),
+            Arc::new(scores),
+        ],
+        None,
+    );
+    Ok(ColumnarValue::Array(Arc::new(struct_array)))
+}
+
+fn invoke_matrix_pca_typed<T>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    matrix: &MatrixBatchContract,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + ndarray_linalg::Lapack<Real = T::Native>,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view = fixed_shape_tensor_view3::<T>(&args.arg_fields[0], matrices, function_name)?;
+    let outputs = collect_pca_outputs::<T>(function_name, &matrix_view)?;
+    build_pca_struct_array::<T>(function_name, matrix, outputs)
+}
+
+struct LinearRegressionOutputs<T> {
+    batch:           usize,
+    coefficient_len: usize,
+    fitted_len:      usize,
+    coefficients:    Vec<T>,
+    fitted_values:   Vec<T>,
+    residuals:       Vec<T>,
+    r_squared:       Vec<T>,
+}
+
+fn collect_linear_regression_outputs<T>(
+    function_name: &str,
+    design_view: &ArrayView3<'_, T::Native>,
+    response_view: &ArrayView2<'_, T::Native>,
+    add_intercept: bool,
+) -> Result<LinearRegressionOutputs<T::Native>>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + ndarray_linalg::Lapack<Real = T::Native>,
+{
+    if design_view.len_of(Axis(0)) != response_view.nrows() {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "batch length mismatch: {} design matrices vs {} response vectors",
+                design_view.len_of(Axis(0)),
+                response_view.nrows()
+            ),
+        ));
+    }
+    let batch = design_view.len_of(Axis(0));
+    let fitted_len = response_view.ncols();
+    let coefficient_len = design_view.len_of(Axis(2)) + usize::from(add_intercept);
+    let mut outputs = LinearRegressionOutputs {
+        batch,
+        coefficient_len,
+        fitted_len,
+        coefficients: Vec::with_capacity(batch * coefficient_len),
+        fitted_values: Vec::with_capacity(batch * fitted_len),
+        residuals: Vec::with_capacity(batch * fitted_len),
+        r_squared: Vec::with_capacity(batch),
+    };
+    for row in 0..batch {
+        let result = nabled::ml::regression::linear_regression_view(
+            &design_view.index_axis(Axis(0), row),
+            &response_view.index_axis(Axis(0), row),
+            add_intercept,
+        )
+        .map_err(|error| exec_error(function_name, error))?;
+        outputs.coefficients.extend(result.coefficients.iter().copied());
+        outputs.fitted_values.extend(result.fitted_values.iter().copied());
+        outputs.residuals.extend(result.residuals.iter().copied());
+        outputs.r_squared.push(result.r_squared);
+    }
+    Ok(outputs)
+}
+
+fn build_linear_regression_struct_array<T>(
+    function_name: &str,
+    value_type: &DataType,
+    outputs: LinearRegressionOutputs<T::Native>,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + ndarray_linalg::Lapack<Real = T::Native>,
+{
+    let coefficients = fixed_size_list_array_from_flat_rows::<T>(
+        function_name,
+        outputs.batch,
+        outputs.coefficient_len,
+        &outputs.coefficients,
+    )?;
+    let fitted_values = fixed_size_list_array_from_flat_rows::<T>(
+        function_name,
+        outputs.batch,
+        outputs.fitted_len,
+        &outputs.fitted_values,
+    )?;
+    let residuals = fixed_size_list_array_from_flat_rows::<T>(
+        function_name,
+        outputs.batch,
+        outputs.fitted_len,
+        &outputs.residuals,
+    )?;
+    let r_squared = primitive_array_from_values::<T>(outputs.r_squared);
+    let struct_array = StructArray::new(
+        vec![
+            vector_field("coefficients", value_type, outputs.coefficient_len, false)?,
+            vector_field("fitted_values", value_type, outputs.fitted_len, false)?,
+            vector_field("residuals", value_type, outputs.fitted_len, false)?,
+            scalar_field("r_squared", value_type, false),
+        ]
+        .into(),
+        vec![
+            Arc::new(coefficients),
+            Arc::new(fitted_values),
+            Arc::new(residuals),
+            Arc::new(r_squared),
+        ],
+        None,
+    );
+    Ok(ColumnarValue::Array(Arc::new(struct_array)))
+}
+
+fn invoke_linear_regression_typed<T>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    design: &MatrixBatchContract,
+    add_intercept: bool,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + ndarray_linalg::Lapack<Real = T::Native>,
+{
+    let design_array = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let response_array = expect_fixed_size_list_arg(args, 2, function_name)?;
+    let design_view =
+        fixed_shape_tensor_view3::<T>(&args.arg_fields[0], design_array, function_name)?;
+    let response_view = fixed_size_list_view2::<T>(response_array, function_name)?;
+    let outputs = collect_linear_regression_outputs::<T>(
+        function_name,
+        &design_view,
+        &response_view,
+        add_intercept,
+    )?;
+    build_linear_regression_struct_array::<T>(function_name, &design.value_type, outputs)
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -88,14 +348,34 @@ impl ScalarUDFImpl for MatrixColumnMeans {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let [_rows, cols] = parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        vector_field(self.name(), cols, args.arg_fields[0].is_nullable())
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        vector_field(self.name(), &matrix.value_type, matrix.cols, args.arg_fields[0].is_nullable())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        invoke_matrix_batch_to_vector_output(&args, self.name(), |matrix| {
-            Ok(nabled::ml::stats::column_means_view(matrix))
-        })
+        match parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?.value_type {
+            DataType::Float32 => invoke_matrix_batch_to_vector_output::<Float32Type, _>(
+                &args,
+                self.name(),
+                |matrix| {
+                    Ok::<_, datafusion::common::DataFusionError>(
+                        nabled::ml::stats::column_means_view(matrix),
+                    )
+                },
+            ),
+            DataType::Float64 => invoke_matrix_batch_to_vector_output::<Float64Type, _>(
+                &args,
+                self.name(),
+                |matrix| {
+                    Ok::<_, datafusion::common::DataFusionError>(
+                        nabled::ml::stats::column_means_view(matrix),
+                    )
+                },
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
     }
 }
 
@@ -120,15 +400,44 @@ impl ScalarUDFImpl for MatrixCenterColumns {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let [rows, cols] = parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        fixed_shape_tensor_field(self.name(), &[rows, cols], args.arg_fields[0].is_nullable())
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &matrix.value_type,
+            &[matrix.rows, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [rows, cols] = parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        invoke_matrix_batch_to_tensor_output(&args, self.name(), rows, cols, |matrix| {
-            Ok(nabled::ml::stats::center_columns_view(matrix))
-        })
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        match matrix.value_type {
+            DataType::Float32 => invoke_matrix_batch_to_tensor_output::<Float32Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                matrix.cols,
+                |view| {
+                    Ok::<_, datafusion::common::DataFusionError>(
+                        nabled::ml::stats::center_columns_view(view),
+                    )
+                },
+            ),
+            DataType::Float64 => invoke_matrix_batch_to_tensor_output::<Float64Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                matrix.cols,
+                |view| {
+                    Ok::<_, datafusion::common::DataFusionError>(
+                        nabled::ml::stats::center_columns_view(view),
+                    )
+                },
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
     }
 }
 
@@ -153,16 +462,36 @@ impl ScalarUDFImpl for MatrixCovariance {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let [_rows, cols] = parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        fixed_shape_tensor_field(self.name(), &[cols, cols], args.arg_fields[0].is_nullable())
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &matrix.value_type,
+            &[matrix.cols, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [_rows, cols] = parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        invoke_matrix_batch_to_tensor_output(&args, self.name(), cols, cols, |matrix| {
-            nabled::ml::stats::covariance_matrix_view(matrix)
-                .map_err(|error| exec_error("matrix_covariance", error))
-        })
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        match matrix.value_type {
+            DataType::Float32 => invoke_matrix_batch_to_tensor_output::<Float32Type, _>(
+                &args,
+                self.name(),
+                matrix.cols,
+                matrix.cols,
+                nabled::ml::stats::covariance_matrix_view,
+            ),
+            DataType::Float64 => invoke_matrix_batch_to_tensor_output::<Float64Type, _>(
+                &args,
+                self.name(),
+                matrix.cols,
+                matrix.cols,
+                nabled::ml::stats::covariance_matrix_view,
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
     }
 }
 
@@ -187,16 +516,36 @@ impl ScalarUDFImpl for MatrixCorrelation {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let [_rows, cols] = parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        fixed_shape_tensor_field(self.name(), &[cols, cols], args.arg_fields[0].is_nullable())
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &matrix.value_type,
+            &[matrix.cols, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [_rows, cols] = parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        invoke_matrix_batch_to_tensor_output(&args, self.name(), cols, cols, |matrix| {
-            nabled::ml::stats::correlation_matrix_view(matrix)
-                .map_err(|error| exec_error("matrix_correlation", error))
-        })
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        match matrix.value_type {
+            DataType::Float32 => invoke_matrix_batch_to_tensor_output::<Float32Type, _>(
+                &args,
+                self.name(),
+                matrix.cols,
+                matrix.cols,
+                nabled::ml::stats::correlation_matrix_view,
+            ),
+            DataType::Float64 => invoke_matrix_batch_to_tensor_output::<Float64Type, _>(
+                &args,
+                self.name(),
+                matrix.cols,
+                matrix.cols,
+                nabled::ml::stats::correlation_matrix_view,
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
     }
 }
 
@@ -221,14 +570,21 @@ impl ScalarUDFImpl for MatrixPca {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let [observations, features] =
-            parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        let keep = observations.min(features);
-        let components = fixed_shape_tensor_field("components", &[keep, features], false)?;
-        let explained_variance = vector_field("explained_variance", keep, false)?;
-        let explained_variance_ratio = vector_field("explained_variance_ratio", keep, false)?;
-        let mean = vector_field("mean", features, false)?;
-        let scores = fixed_shape_tensor_field("scores", &[observations, keep], false)?;
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let keep = matrix.rows.min(matrix.cols);
+        let components = fixed_shape_tensor_field(
+            "components",
+            &matrix.value_type,
+            &[keep, matrix.cols],
+            false,
+        )?;
+        let explained_variance =
+            vector_field("explained_variance", &matrix.value_type, keep, false)?;
+        let explained_variance_ratio =
+            vector_field("explained_variance_ratio", &matrix.value_type, keep, false)?;
+        let mean = vector_field("mean", &matrix.value_type, matrix.cols, false)?;
+        let scores =
+            fixed_shape_tensor_field("scores", &matrix.value_type, &[matrix.rows, keep], false)?;
         Ok(struct_field(
             self.name(),
             vec![
@@ -243,73 +599,18 @@ impl ScalarUDFImpl for MatrixPca {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let matrices = expect_fixed_size_list_arg(&args, 1, self.name())?;
-        let [observations, features] =
-            parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        let keep = observations.min(features);
-        let matrix_view = fixed_shape_tensor_view3_f64(&args.arg_fields[0], matrices, self.name())?;
-        let batch = matrix_view.len_of(Axis(0));
-
-        let mut components_values = Vec::with_capacity(batch * keep * features);
-        let mut explained_variance_values = Vec::with_capacity(batch * keep);
-        let mut explained_variance_ratio_values = Vec::with_capacity(batch * keep);
-        let mut mean_values = Vec::with_capacity(batch * features);
-        let mut scores_values = Vec::with_capacity(batch * observations * keep);
-
-        for row in 0..batch {
-            let result =
-                nabled::ml::pca::compute_pca_view(&matrix_view.index_axis(Axis(0), row), None)
-                    .map_err(|error| exec_error(self.name(), error))?;
-            components_values.extend(result.components.iter().copied());
-            explained_variance_values.extend(result.explained_variance.iter().copied());
-            explained_variance_ratio_values.extend(result.explained_variance_ratio.iter().copied());
-            mean_values.extend(result.mean.iter().copied());
-            scores_values.extend(result.scores.iter().copied());
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        match matrix.value_type {
+            DataType::Float32 => {
+                invoke_matrix_pca_typed::<Float32Type>(&args, self.name(), &matrix)
+            }
+            DataType::Float64 => {
+                invoke_matrix_pca_typed::<Float64Type>(&args, self.name(), &matrix)
+            }
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
         }
-
-        let components = Array3::from_shape_vec((batch, keep, features), components_values)
-            .map_err(|error| exec_error(self.name(), error))?;
-        let (_components_field, components) =
-            ndarrow::arrayd_to_fixed_shape_tensor("components", components.into_dyn())
-                .map_err(|error| exec_error(self.name(), error))?;
-        let explained_variance = Array2::from_shape_vec((batch, keep), explained_variance_values)
-            .map_err(|error| exec_error(self.name(), error))?
-            .into_arrow()
-            .map_err(|error| exec_error(self.name(), error))?;
-        let explained_variance_ratio =
-            Array2::from_shape_vec((batch, keep), explained_variance_ratio_values)
-                .map_err(|error| exec_error(self.name(), error))?
-                .into_arrow()
-                .map_err(|error| exec_error(self.name(), error))?;
-        let mean = Array2::from_shape_vec((batch, features), mean_values)
-            .map_err(|error| exec_error(self.name(), error))?
-            .into_arrow()
-            .map_err(|error| exec_error(self.name(), error))?;
-        let scores = Array3::from_shape_vec((batch, observations, keep), scores_values)
-            .map_err(|error| exec_error(self.name(), error))?;
-        let (_scores_field, scores) =
-            ndarrow::arrayd_to_fixed_shape_tensor("scores", scores.into_dyn())
-                .map_err(|error| exec_error(self.name(), error))?;
-
-        let struct_array = StructArray::new(
-            vec![
-                fixed_shape_tensor_field("components", &[keep, features], false)?,
-                vector_field("explained_variance", keep, false)?,
-                vector_field("explained_variance_ratio", keep, false)?,
-                vector_field("mean", features, false)?,
-                fixed_shape_tensor_field("scores", &[observations, keep], false)?,
-            ]
-            .into(),
-            vec![
-                Arc::new(components),
-                Arc::new(explained_variance),
-                Arc::new(explained_variance_ratio),
-                Arc::new(mean),
-                Arc::new(scores),
-            ],
-            None,
-        );
-        Ok(ColumnarValue::Array(Arc::new(struct_array)))
     }
 }
 
@@ -334,23 +635,33 @@ impl ScalarUDFImpl for LinearRegression {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let [observations, features] =
-            parse_float64_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        let vector_len = parse_float64_vector_field(&args.arg_fields[1], self.name(), 2)?;
-        if vector_len != observations {
+        let design = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let response = parse_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if design.value_type != response.value_type {
             return Err(exec_error(
                 self.name(),
                 format!(
-                    "response vector length mismatch: expected {observations}, found {vector_len}"
+                    "value type mismatch: design {}, response {}",
+                    design.value_type, response.value_type
+                ),
+            ));
+        }
+        if response.len != design.rows {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "response vector length mismatch: expected {}, found {}",
+                    design.rows, response.len
                 ),
             ));
         }
         let add_intercept = expect_bool_scalar_argument(&args, 3, self.name())?;
-        let coefficient_len = features + usize::from(add_intercept);
-        let coefficients = vector_field("coefficients", coefficient_len, false)?;
-        let fitted_values = vector_field("fitted_values", observations, false)?;
-        let residuals = vector_field("residuals", observations, false)?;
-        let r_squared = float64_scalar_field("r_squared", false);
+        let coefficient_len = design.cols + usize::from(add_intercept);
+        let coefficients =
+            vector_field("coefficients", &design.value_type, coefficient_len, false)?;
+        let fitted_values = vector_field("fitted_values", &design.value_type, design.rows, false)?;
+        let residuals = vector_field("residuals", &design.value_type, design.rows, false)?;
+        let r_squared = scalar_field("r_squared", &design.value_type, false);
         Ok(struct_field(
             self.name(),
             vec![
@@ -364,74 +675,25 @@ impl ScalarUDFImpl for LinearRegression {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let design = expect_fixed_size_list_arg(&args, 1, self.name())?;
-        let response = expect_fixed_size_list_arg(&args, 2, self.name())?;
         let add_intercept = expect_bool_scalar_arg(&args, 3, self.name())?;
-        let design_view = fixed_shape_tensor_view3_f64(&args.arg_fields[0], design, self.name())?;
-        let response_view = fixed_size_list_view2_f64(response, self.name())?;
-        if design_view.len_of(Axis(0)) != response_view.nrows() {
-            return Err(exec_error(
+        let design_contract = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        match design_contract.value_type {
+            DataType::Float32 => invoke_linear_regression_typed::<Float32Type>(
+                &args,
                 self.name(),
-                format!(
-                    "batch length mismatch: {} design matrices vs {} response vectors",
-                    design_view.len_of(Axis(0)),
-                    response_view.nrows()
-                ),
-            ));
-        }
-
-        let batch = design_view.len_of(Axis(0));
-        let fitted_len = response_view.ncols();
-        let coefficient_len = design_view.len_of(Axis(2)) + usize::from(add_intercept);
-        let mut coefficients = Vec::with_capacity(batch * coefficient_len);
-        let mut fitted_values = Vec::with_capacity(batch * fitted_len);
-        let mut residuals = Vec::with_capacity(batch * fitted_len);
-        let mut r_squared = Vec::with_capacity(batch);
-
-        for row in 0..batch {
-            let result = nabled::ml::regression::linear_regression_view(
-                &design_view.index_axis(Axis(0), row),
-                &response_view.index_axis(Axis(0), row),
+                &design_contract,
                 add_intercept,
-            )
-            .map_err(|error| exec_error(self.name(), error))?;
-            coefficients.extend(result.coefficients.iter().copied());
-            fitted_values.extend(result.fitted_values.iter().copied());
-            residuals.extend(result.residuals.iter().copied());
-            r_squared.push(result.r_squared);
+            ),
+            DataType::Float64 => invoke_linear_regression_typed::<Float64Type>(
+                &args,
+                self.name(),
+                &design_contract,
+                add_intercept,
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
         }
-
-        let coefficients = Array2::from_shape_vec((batch, coefficient_len), coefficients)
-            .map_err(|error| exec_error(self.name(), error))?
-            .into_arrow()
-            .map_err(|error| exec_error(self.name(), error))?;
-        let fitted_values = Array2::from_shape_vec((batch, fitted_len), fitted_values)
-            .map_err(|error| exec_error(self.name(), error))?
-            .into_arrow()
-            .map_err(|error| exec_error(self.name(), error))?;
-        let residuals = Array2::from_shape_vec((batch, fitted_len), residuals)
-            .map_err(|error| exec_error(self.name(), error))?
-            .into_arrow()
-            .map_err(|error| exec_error(self.name(), error))?;
-        let r_squared = Array1::from_vec(r_squared)
-            .into_arrow()
-            .map_err(|error| exec_error(self.name(), error))?;
-
-        let coefficients_field = vector_field("coefficients", coefficient_len, false)?;
-        let fitted_values_field = vector_field("fitted_values", fitted_len, false)?;
-        let residuals_field = vector_field("residuals", fitted_len, false)?;
-        let r_squared_field = float64_scalar_field("r_squared", false);
-        let struct_array = StructArray::new(
-            vec![coefficients_field, fitted_values_field, residuals_field, r_squared_field].into(),
-            vec![
-                Arc::new(coefficients),
-                Arc::new(fitted_values),
-                Arc::new(residuals),
-                Arc::new(r_squared),
-            ],
-            None,
-        );
-        Ok(ColumnarValue::Array(Arc::new(struct_array)))
     }
 }
 

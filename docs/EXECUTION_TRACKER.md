@@ -20,16 +20,20 @@ codebase.
 
 ## Current Baseline
 
-1. Repository scaffold exists as a single crate with a thin registration/catalog entry surface.
+1. The repository is still a single crate, but it now has a real registration/catalog surface and
+   domain UDF modules.
 2. DataFusion is pinned to an Arrow-58-compatible git revision on `main`.
-3. `.justfile` quality gates are present and passing on the scaffold baseline.
+3. `.justfile` quality gates are present and passing on the current tree.
 4. The repository now has authoritative planning docs and AGENTS bootstrap instructions.
 5. `ndatafusion` now depends on published `nabled 0.0.7` and `ndarrow 0.0.3`.
 6. A substantial `f64`-first numerical DataFusion catalog now exists across vector, matrix,
    decomposition, sparse, tensor, and ML/stat slices.
 7. The catalog now includes SQL-native constructors for the canonical `f64` vector, matrix,
    tensor, variable-tensor, and CSR sparse-batch contracts.
-8. The next local work is publish hardening and residual admitted parity over the expanded catalog.
+8. README examples and end-to-end SQL integration coverage now exist for the constructor-backed
+   catalog.
+9. Publish hardening is now in place for the current git-consumed release posture, and the next
+   local work is residual admitted parity over the expanded catalog.
 
 ## V1 Publish Gate (Ordered, Required)
 
@@ -97,19 +101,39 @@ order:
     - `make_csr_matrix_batch`
     - constructor success/failure coverage now exists for scalar-literal-style and array-column
       inputs
+13. `D-013`: `N-009` is now underway with real publish-facing usage coverage:
+    - README quick-start examples now use the constructor-backed SQL surface
+    - integration tests now exercise `SessionContext` registration plus SQL execution for
+      literal-backed constructor pipelines
+    - integration tests now exercise list-column-backed vector/matrix flows
+    - integration tests now exercise sparse-plus-variable-tensor and fixed-shape tensor pipelines
+14. `D-014`: `N-009` publish hardening is now complete for the current local release posture:
+    - README install guidance now reflects git consumption instead of implying crates.io
+      publication
+    - crate-level rustdoc now documents the constructor-backed `f64`-first contract and quick-start
+      usage
+    - docs.rs metadata is configured for `--no-default-features`
+    - `docs/PUBLISH_CHECKLIST.md` now records the release gate, release-note minimums, and the
+      current DataFusion git-dependency publication blocker
+15. `D-015`: `N-010` has advanced again on dense matrix/decomposition parity:
+    - row-wise `matrix_matvec` now exists over canonical matrix/vector batch carriers
+    - QR least-squares and QR condition-number helpers now exist on the direct `f64` matrix batch
+      surface
+    - SVD pseudo-inverse, condition-number, and rank helpers now exist on the direct `f64` matrix
+      batch surface
+    - SQL integration coverage now exercises the new matrix helper slice through constructor-backed
+      queries
 
 ## Next
 
-1. `N-009` (`Layer 3`, `ndatafusion`): Harden the new catalog with examples, richer integration
-   coverage, and publish-ready docs/release metadata.
-2. `N-010` (`Layer 3`, `ndatafusion`): Finish the residual admitted type/domain parity work that
+1. `N-010` (`Layer 3`, `ndatafusion`): Finish the residual admitted type/domain parity work that
    still fits the `f64`-first, SQL-natural v1 contract while preserving direct batch delegation on
    hot paths.
 
 ## Needed
 
-1. Explicit publish hardening: README examples, docs.rs viability, release notes, and coverage
-   proof over the admitted v1 surface.
+1. Replace the temporary DataFusion git dependency once a published Arrow-58-compatible release
+   exists on crates.io.
 2. A post-v1 decision on whether UDAFs, window functions, planners, or rewrites are worth
    introducing for dataset-level or ergonomic workflows.
 3. A post-v1 performance pass to reduce fallback lift/assembly overhead where direct batch
@@ -118,5 +142,6 @@ order:
 ## Round Scope Lock
 
 1. This round starts local `ndatafusion` implementation after the upstream prerequisite releases.
-2. The next execution round should start at `N-009`: publish hardening and examples.
+2. The next execution round should continue `N-010`: residual admitted parity on the `f64`-first
+   catalog.
 3. Preserve the concept-first contract while the current catalog expands.

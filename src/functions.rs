@@ -56,6 +56,11 @@ pub fn vector_cosine_distance(left: Expr, right: Expr) -> Expr {
 pub fn vector_normalize(vector: Expr) -> Expr { udfs::vector_normalize_udf().call(vec![vector]) }
 
 #[must_use]
+pub fn matrix_matvec(matrix: Expr, vector: Expr) -> Expr {
+    udfs::matrix_matvec_udf().call(vec![matrix, vector])
+}
+
+#[must_use]
 pub fn matrix_matmul(left: Expr, right: Expr) -> Expr {
     udfs::matrix_matmul_udf().call(vec![left, right])
 }
@@ -98,7 +103,30 @@ pub fn matrix_cholesky_inverse(matrix: Expr) -> Expr {
 pub fn matrix_qr(matrix: Expr) -> Expr { udfs::matrix_qr_udf().call(vec![matrix]) }
 
 #[must_use]
+pub fn matrix_qr_solve_least_squares(matrix: Expr, rhs: Expr) -> Expr {
+    udfs::matrix_qr_solve_least_squares_udf().call(vec![matrix, rhs])
+}
+
+#[must_use]
+pub fn matrix_qr_condition_number(matrix: Expr) -> Expr {
+    udfs::matrix_qr_condition_number_udf().call(vec![matrix])
+}
+
+#[must_use]
 pub fn matrix_svd(matrix: Expr) -> Expr { udfs::matrix_svd_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_svd_pseudo_inverse(matrix: Expr) -> Expr {
+    udfs::matrix_svd_pseudo_inverse_udf().call(vec![matrix])
+}
+
+#[must_use]
+pub fn matrix_svd_condition_number(matrix: Expr) -> Expr {
+    udfs::matrix_svd_condition_number_udf().call(vec![matrix])
+}
+
+#[must_use]
+pub fn matrix_svd_rank(matrix: Expr) -> Expr { udfs::matrix_svd_rank_udf().call(vec![matrix]) }
 
 #[must_use]
 pub fn sparse_matvec(matrices: Expr, vectors: Expr) -> Expr {
@@ -201,8 +229,10 @@ mod tests {
         make_vector, matrix_center_columns, matrix_cholesky, matrix_cholesky_inverse,
         matrix_cholesky_solve, matrix_column_means, matrix_correlation, matrix_covariance,
         matrix_determinant, matrix_inverse, matrix_log_determinant, matrix_lu, matrix_lu_solve,
-        matrix_matmul, matrix_pca, matrix_qr, matrix_svd, sparse_matmat_dense,
-        sparse_matmat_sparse, sparse_matvec, sparse_transpose, tensor_batched_dot_last_axis,
+        matrix_matmul, matrix_matvec, matrix_pca, matrix_qr, matrix_qr_condition_number,
+        matrix_qr_solve_least_squares, matrix_svd, matrix_svd_condition_number,
+        matrix_svd_pseudo_inverse, matrix_svd_rank, sparse_matmat_dense, sparse_matmat_sparse,
+        sparse_matvec, sparse_transpose, tensor_batched_dot_last_axis,
         tensor_batched_matmul_last_two, tensor_l2_norm_last_axis, tensor_normalize_last_axis,
         tensor_sum_last_axis, tensor_variable_batched_dot_last_axis,
         tensor_variable_l2_norm_last_axis, tensor_variable_normalize_last_axis,
@@ -251,10 +281,9 @@ mod tests {
     }
 
     #[test]
-    fn numerical_helpers_wrap_the_expected_udfs() {
+    fn vector_and_matrix_helpers_wrap_the_expected_udfs() {
         let one = literal_i64(1);
         let two = literal_i64(2);
-        let three = literal_i64(3);
 
         assert_scalar_function(vector_l2_norm(one.clone()), "vector_l2_norm", 1);
         assert_scalar_function(vector_dot(one.clone(), two.clone()), "vector_dot", 2);
@@ -269,7 +298,16 @@ mod tests {
             2,
         );
         assert_scalar_function(vector_normalize(one.clone()), "vector_normalize", 1);
+        assert_scalar_function(matrix_matvec(one.clone(), two.clone()), "matrix_matvec", 2);
         assert_scalar_function(matrix_matmul(one.clone(), two.clone()), "matrix_matmul", 2);
+    }
+
+    #[test]
+    fn decomposition_sparse_tensor_and_ml_helpers_wrap_the_expected_udfs() {
+        let one = literal_i64(1);
+        let two = literal_i64(2);
+        let three = literal_i64(3);
+
         assert_scalar_function(matrix_lu(one.clone()), "matrix_lu", 1);
         assert_scalar_function(matrix_lu_solve(one.clone(), two.clone()), "matrix_lu_solve", 2);
         assert_scalar_function(
@@ -283,7 +321,28 @@ mod tests {
         assert_scalar_function(matrix_cholesky(one.clone()), "matrix_cholesky", 1);
         assert_scalar_function(matrix_cholesky_inverse(one.clone()), "matrix_cholesky_inverse", 1);
         assert_scalar_function(matrix_qr(one.clone()), "matrix_qr", 1);
+        assert_scalar_function(
+            matrix_qr_solve_least_squares(one.clone(), two.clone()),
+            "matrix_qr_solve_least_squares",
+            2,
+        );
+        assert_scalar_function(
+            matrix_qr_condition_number(one.clone()),
+            "matrix_qr_condition_number",
+            1,
+        );
         assert_scalar_function(matrix_svd(one.clone()), "matrix_svd", 1);
+        assert_scalar_function(
+            matrix_svd_pseudo_inverse(one.clone()),
+            "matrix_svd_pseudo_inverse",
+            1,
+        );
+        assert_scalar_function(
+            matrix_svd_condition_number(one.clone()),
+            "matrix_svd_condition_number",
+            1,
+        );
+        assert_scalar_function(matrix_svd_rank(one.clone()), "matrix_svd_rank", 1);
         assert_scalar_function(sparse_matvec(one.clone(), two.clone()), "sparse_matvec", 2);
         assert_scalar_function(
             sparse_matmat_dense(one.clone(), two.clone()),

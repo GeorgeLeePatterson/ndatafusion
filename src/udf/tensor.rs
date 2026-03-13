@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::types::Float64Type;
+use datafusion::arrow::array::types::{Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
@@ -9,10 +9,10 @@ use datafusion::logical_expr::{
 };
 
 use super::common::{expect_fixed_size_list_arg, expect_struct_arg, map_arrow_error};
-use crate::error::plan_error;
+use crate::error::{exec_error, plan_error};
 use crate::metadata::{
-    fixed_shape_tensor_field, parse_float64_tensor_batch_field,
-    parse_float64_variable_shape_tensor_field, variable_shape_tensor_field,
+    fixed_shape_tensor_field, parse_tensor_batch_field, parse_variable_shape_tensor_field,
+    variable_shape_tensor_field,
 };
 use crate::signatures::any_signature;
 
@@ -86,19 +86,37 @@ impl ScalarUDFImpl for TensorSumLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let shape = parse_float64_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        let reduced = reduced_shape(self.name(), &shape)?;
-        fixed_shape_tensor_field(self.name(), &reduced, args.arg_fields[0].is_nullable())
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let reduced = reduced_shape(self.name(), &contract.shape)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &contract.value_type,
+            &reduced,
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
         let tensor = expect_fixed_size_list_arg(&args, 1, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::sum_last_axis::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            tensor,
-        )
+        let output = match contract.value_type {
+            DataType::Float32 => nabled::arrow::tensor::sum_last_axis::<Float32Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            DataType::Float64 => nabled::arrow::tensor::sum_last_axis::<Float64Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported tensor value type {actual}"),
+                ));
+            }
+        }
         .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -123,19 +141,37 @@ impl ScalarUDFImpl for TensorL2NormLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let shape = parse_float64_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        let reduced = reduced_shape(self.name(), &shape)?;
-        fixed_shape_tensor_field(self.name(), &reduced, args.arg_fields[0].is_nullable())
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let reduced = reduced_shape(self.name(), &contract.shape)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &contract.value_type,
+            &reduced,
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
         let tensor = expect_fixed_size_list_arg(&args, 1, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::l2_norm_last_axis::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            tensor,
-        )
+        let output = match contract.value_type {
+            DataType::Float32 => nabled::arrow::tensor::l2_norm_last_axis::<Float32Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            DataType::Float64 => nabled::arrow::tensor::l2_norm_last_axis::<Float64Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported tensor value type {actual}"),
+                ));
+            }
+        }
         .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -160,18 +196,36 @@ impl ScalarUDFImpl for TensorNormalizeLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let shape = parse_float64_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        fixed_shape_tensor_field(self.name(), &shape, args.arg_fields[0].is_nullable())
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &contract.value_type,
+            &contract.shape,
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
         let tensor = expect_fixed_size_list_arg(&args, 1, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::normalize_last_axis::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            tensor,
-        )
+        let output = match contract.value_type {
+            DataType::Float32 => nabled::arrow::tensor::normalize_last_axis::<Float32Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            DataType::Float64 => nabled::arrow::tensor::normalize_last_axis::<Float64Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported tensor value type {actual}"),
+                ));
+            }
+        }
         .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -196,29 +250,68 @@ impl ScalarUDFImpl for TensorBatchedDotLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let left_shape = parse_float64_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        let right_shape = parse_float64_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
-        if left_shape != right_shape {
+        let left = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
             return Err(plan_error(
                 self.name(),
-                format!("tensor shape mismatch: left {left_shape:?}, right {right_shape:?}"),
+                format!(
+                    "tensor value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
             ));
         }
-        let reduced = reduced_shape(self.name(), &left_shape)?;
-        fixed_shape_tensor_field(self.name(), &reduced, args.arg_fields[0].is_nullable())
+        if left.shape != right.shape {
+            return Err(plan_error(
+                self.name(),
+                format!("tensor shape mismatch: left {:?}, right {:?}", left.shape, right.shape),
+            ));
+        }
+        let reduced = reduced_shape(self.name(), &left.shape)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &left.value_type,
+            &reduced,
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let left_contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right_contract = parse_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left_contract.value_type != right_contract.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "tensor value type mismatch: left {}, right {}",
+                    left_contract.value_type, right_contract.value_type
+                ),
+            ));
+        }
         let left = expect_fixed_size_list_arg(&args, 1, self.name())?;
         let right = expect_fixed_size_list_arg(&args, 2, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::batched_dot_last_axis::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            left,
-            args.arg_fields[1].as_ref(),
-            right,
-        )
+        let output = match left_contract.value_type {
+            DataType::Float32 => nabled::arrow::tensor::batched_dot_last_axis::<Float32Type>(
+                args.arg_fields[0].as_ref(),
+                left,
+                args.arg_fields[1].as_ref(),
+                right,
+            ),
+            DataType::Float64 => nabled::arrow::tensor::batched_dot_last_axis::<Float64Type>(
+                args.arg_fields[0].as_ref(),
+                left,
+                args.arg_fields[1].as_ref(),
+                right,
+            ),
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported tensor value type {actual}"),
+                ));
+            }
+        }
         .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -243,54 +336,94 @@ impl ScalarUDFImpl for TensorBatchedMatmulLastTwo {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let left_shape = parse_float64_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
-        let right_shape = parse_float64_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
-        if left_shape.len() < 3 || right_shape.len() < 3 {
+        let left = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(plan_error(
+                self.name(),
+                format!(
+                    "tensor value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        if left.shape.len() < 3 || right.shape.len() < 3 {
             return Err(plan_error(
                 self.name(),
                 format!(
                     "{} requires tensors with rank >= 3, found left {:?} and right {:?}",
                     self.name(),
-                    left_shape,
-                    right_shape
+                    left.shape,
+                    right.shape
                 ),
             ));
         }
-        if left_shape[..left_shape.len() - 2] != right_shape[..right_shape.len() - 2] {
+        if left.shape[..left.shape.len() - 2] != right.shape[..right.shape.len() - 2] {
             return Err(plan_error(
                 self.name(),
                 format!(
                     "tensor batch-prefix mismatch: left {:?}, right {:?}",
-                    &left_shape[..left_shape.len() - 2],
-                    &right_shape[..right_shape.len() - 2]
+                    &left.shape[..left.shape.len() - 2],
+                    &right.shape[..right.shape.len() - 2]
                 ),
             ));
         }
-        if left_shape[left_shape.len() - 1] != right_shape[right_shape.len() - 2] {
+        if left.shape[left.shape.len() - 1] != right.shape[right.shape.len() - 2] {
             return Err(plan_error(
                 self.name(),
                 format!(
-                    "incompatible tensor matmul shapes: left {left_shape:?}, right {right_shape:?}"
+                    "incompatible tensor matmul shapes: left {:?}, right {:?}",
+                    left.shape, right.shape
                 ),
             ));
         }
-        let mut output_shape = left_shape[..left_shape.len() - 2].to_vec();
-        output_shape.push(left_shape[left_shape.len() - 2]);
-        output_shape.push(right_shape[right_shape.len() - 1]);
-        fixed_shape_tensor_field(self.name(), &output_shape, args.arg_fields[0].is_nullable())
+        let mut output_shape = left.shape[..left.shape.len() - 2].to_vec();
+        output_shape.push(left.shape[left.shape.len() - 2]);
+        output_shape.push(right.shape[right.shape.len() - 1]);
+        fixed_shape_tensor_field(
+            self.name(),
+            &left.value_type,
+            &output_shape,
+            args.arg_fields[0].is_nullable(),
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let left_contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right_contract = parse_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left_contract.value_type != right_contract.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "tensor value type mismatch: left {}, right {}",
+                    left_contract.value_type, right_contract.value_type
+                ),
+            ));
+        }
         let left = expect_fixed_size_list_arg(&args, 1, self.name())?;
         let right = expect_fixed_size_list_arg(&args, 2, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::batched_matmul_last_two::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            left,
-            args.arg_fields[1].as_ref(),
-            right,
-        )
+        let output = match left_contract.value_type {
+            DataType::Float32 => nabled::arrow::tensor::batched_matmul_last_two::<Float32Type>(
+                args.arg_fields[0].as_ref(),
+                left,
+                args.arg_fields[1].as_ref(),
+                right,
+            ),
+            DataType::Float64 => nabled::arrow::tensor::batched_matmul_last_two::<Float64Type>(
+                args.arg_fields[0].as_ref(),
+                left,
+                args.arg_fields[1].as_ref(),
+                right,
+            ),
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported tensor value type {actual}"),
+                ));
+            }
+        }
         .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -315,12 +448,12 @@ impl ScalarUDFImpl for TensorVariableSumLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let contract =
-            parse_float64_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let contract = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
         let reduced =
             reduced_uniform_shape(self.name(), contract.dimensions, contract.uniform_shape)?;
         variable_shape_tensor_field(
             self.name(),
+            &contract.value_type,
             contract.dimensions - 1,
             reduced.as_deref(),
             args.arg_fields[0].is_nullable(),
@@ -328,13 +461,26 @@ impl ScalarUDFImpl for TensorVariableSumLastAxis {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let contract = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
         let tensor = expect_struct_arg(&args, 1, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::sum_last_axis_variable::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            tensor,
-        )
+        let output = match contract.value_type {
+            DataType::Float32 => nabled::arrow::tensor::sum_last_axis_variable::<Float32Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            DataType::Float64 => nabled::arrow::tensor::sum_last_axis_variable::<Float64Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported variable tensor value type {actual}"),
+                ));
+            }
+        }
         .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -359,12 +505,12 @@ impl ScalarUDFImpl for TensorVariableL2NormLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let contract =
-            parse_float64_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let contract = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
         let reduced =
             reduced_uniform_shape(self.name(), contract.dimensions, contract.uniform_shape)?;
         variable_shape_tensor_field(
             self.name(),
+            &contract.value_type,
             contract.dimensions - 1,
             reduced.as_deref(),
             args.arg_fields[0].is_nullable(),
@@ -372,13 +518,26 @@ impl ScalarUDFImpl for TensorVariableL2NormLastAxis {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let contract = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
         let tensor = expect_struct_arg(&args, 1, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::l2_norm_last_axis_variable::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            tensor,
-        )
+        let output = match contract.value_type {
+            DataType::Float32 => nabled::arrow::tensor::l2_norm_last_axis_variable::<Float32Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            DataType::Float64 => nabled::arrow::tensor::l2_norm_last_axis_variable::<Float64Type>(
+                args.arg_fields[0].as_ref(),
+                tensor,
+            ),
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported variable tensor value type {actual}"),
+                ));
+            }
+        }
         .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -403,10 +562,10 @@ impl ScalarUDFImpl for TensorVariableNormalizeLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let contract =
-            parse_float64_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let contract = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
         variable_shape_tensor_field(
             self.name(),
+            &contract.value_type,
             contract.dimensions,
             contract.uniform_shape.as_deref(),
             args.arg_fields[0].is_nullable(),
@@ -414,13 +573,25 @@ impl ScalarUDFImpl for TensorVariableNormalizeLastAxis {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let contract = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
         let tensor = expect_struct_arg(&args, 1, self.name())?;
-        let (_field, output) = nabled::arrow::tensor::normalize_last_axis_variable::<Float64Type>(
-            args.arg_fields[0].as_ref(),
-            tensor,
-        )
-        .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        let output =
+            match contract.value_type {
+                DataType::Float32 => nabled::arrow::tensor::normalize_last_axis_variable::<
+                    Float32Type,
+                >(args.arg_fields[0].as_ref(), tensor),
+                DataType::Float64 => nabled::arrow::tensor::normalize_last_axis_variable::<
+                    Float64Type,
+                >(args.arg_fields[0].as_ref(), tensor),
+                actual => {
+                    return Err(exec_error(
+                        self.name(),
+                        format!("unsupported variable tensor value type {actual}"),
+                    ));
+                }
+            }
+            .map_err(|error| map_arrow_error(self.name(), error))?;
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 
@@ -445,12 +616,22 @@ impl ScalarUDFImpl for TensorVariableBatchedDotLastAxis {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        let left = parse_float64_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
-        let right = parse_float64_variable_shape_tensor_field(&args.arg_fields[1], self.name(), 2)?;
+        let left = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_variable_shape_tensor_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(plan_error(
+                self.name(),
+                format!(
+                    "variable tensor value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
         validate_variable_pair_ranks(self.name(), left.dimensions, right.dimensions)?;
         let reduced = reduced_uniform_shape(self.name(), left.dimensions, left.uniform_shape)?;
         variable_shape_tensor_field(
             self.name(),
+            &left.value_type,
             left.dimensions - 1,
             reduced.as_deref(),
             args.arg_fields[0].is_nullable(),
@@ -458,17 +639,46 @@ impl ScalarUDFImpl for TensorVariableBatchedDotLastAxis {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let left_contract = parse_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let right_contract =
+            parse_variable_shape_tensor_field(&args.arg_fields[1], self.name(), 2)?;
+        if left_contract.value_type != right_contract.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "variable tensor value type mismatch: left {}, right {}",
+                    left_contract.value_type, right_contract.value_type
+                ),
+            ));
+        }
         let left = expect_struct_arg(&args, 1, self.name())?;
         let right = expect_struct_arg(&args, 2, self.name())?;
-        let (_field, output) =
-            nabled::arrow::tensor::batched_dot_last_axis_variable::<Float64Type>(
-                args.arg_fields[0].as_ref(),
-                left,
-                args.arg_fields[1].as_ref(),
-                right,
-            )
-            .map_err(|error| map_arrow_error(self.name(), error))?;
-        Ok(ColumnarValue::Array(Arc::new(output)))
+        let output = match left_contract.value_type {
+            DataType::Float32 => {
+                nabled::arrow::tensor::batched_dot_last_axis_variable::<Float32Type>(
+                    args.arg_fields[0].as_ref(),
+                    left,
+                    args.arg_fields[1].as_ref(),
+                    right,
+                )
+            }
+            DataType::Float64 => {
+                nabled::arrow::tensor::batched_dot_last_axis_variable::<Float64Type>(
+                    args.arg_fields[0].as_ref(),
+                    left,
+                    args.arg_fields[1].as_ref(),
+                    right,
+                )
+            }
+            actual => {
+                return Err(exec_error(
+                    self.name(),
+                    format!("unsupported variable tensor value type {actual}"),
+                ));
+            }
+        }
+        .map_err(|error| map_arrow_error(self.name(), error))?;
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
 }
 

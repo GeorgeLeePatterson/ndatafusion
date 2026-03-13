@@ -23,10 +23,21 @@ top of the released upstream contracts.
     domain coverage, and line coverage above 90%.
 11. The active ingress model remains concept-first: each mathematical object family needs one
     canonical standalone ingress and one canonical `rows-of-X` batch carrier.
+12. End-to-end SQL integration coverage now exists for literal-backed constructors, list-column
+    constructor pipelines, sparse-plus-variable-tensor composition, and fixed-shape tensor
+    constructor/reduction flows.
+13. Crate-level rustdoc, docs.rs metadata, and an explicit publish checklist now exist for the
+    current constructor-backed surface.
+14. crates.io publication is still intentionally blocked while `ndatafusion` depends on a git
+    revision of DataFusion for Arrow 58 compatibility.
+15. The dense matrix/decomposition slice now also covers row-wise `matrix_matvec`, QR
+    least-squares, QR condition number, and SVD pseudo-inverse / condition-number / rank helpers,
+    with SQL integration coverage for the new helper family.
 
 ## Current Repository Reality
 
-1. Root files exist for crate metadata, linting, formatting, and a minimal integration test.
+1. Root files now cover crate metadata, linting, formatting, docs.rs posture, and constructor-aware
+   integration coverage.
 2. There is no `docs/` implementation history before this planning baseline.
 3. A larger internal module tree now exists for registration, shared metadata/signature/error
    helpers, and domain UDFs.
@@ -36,7 +47,8 @@ top of the released upstream contracts.
    currently handled case-by-case or remain unimplemented.
 6. SQL-native constructor ingress now exists from ordinary `List` values into the canonical
    `f64` vector, matrix, tensor, variable-tensor, and CSR sparse-batch contracts.
-7. Current validation covers both successful batch-native paths and representative type, shape,
+7. README-level quick-start examples now match real constructor-backed SQL flows.
+8. Current validation covers both successful batch-native paths and representative type, shape,
    scalar-argument, and batch-length failure contracts.
 
 ## Constraints In Force
@@ -57,14 +69,20 @@ top of the released upstream contracts.
 Today:
 
 1. `src/lib.rs`, `src/register.rs`, `src/functions.rs`, `src/udfs.rs`
-   - thin local registration and catalog scaffold only
-2. `tests/e2e.rs`
-   - placeholder integration target required by `.justfile`
+   - crate-level docs, registration, public expression helpers, and UDF catalog surface
+2. `src/error.rs`, `src/metadata.rs`, `src/signatures.rs`
+   - shared contract, signature, and error helpers
+3. `src/udf/`
+   - constructor plus domain UDF implementations across vector, matrix, decomposition, sparse,
+     tensor, and ML/stat slices
+4. `tests/e2e.rs`
+   - end-to-end SQL coverage for registration, constructors, and representative numerical flows
 
 Target ownership after the first real implementation rounds:
 
 1. registration and public crate surface
-2. shared metadata and cell codecs
+2. shared metadata and any narrow fallback cell codecs still justified by missing lower-layer
+   batch contracts
 3. domain UDF modules grouped by numerical domain
 4. optional planner or rewrite integration only if admitted later
 
@@ -72,9 +90,10 @@ Target ownership after the first real implementation rounds:
 
 Local implementation round:
 
-1. Add SQL constructors and normalizers for canonical numerical value contracts.
-2. Harden the expanded UDF surface with examples and broader integration coverage.
-3. Push toward publish-ready docs and release metadata.
+1. Finish the residual admitted `f64`-first catalog that still fits the direct batch-delegation
+   model.
+2. Preserve the current publish-hardening posture while the catalog grows.
+3. Revisit crates.io publication only once DataFusion exposes a compatible published release line.
 
 ## V1 Publish Readiness
 
@@ -82,6 +101,6 @@ Not ready.
 
 Blocked by:
 
-1. missing examples and richer integration coverage
-2. missing publish hardening and release-ready documentation
-3. residual admitted parity work that still fits the `f64`-first v1 contract
+1. residual admitted parity work that still fits the `f64`-first v1 contract
+2. the current DataFusion git dependency, which blocks crates.io publication until a compatible
+   published release exists
