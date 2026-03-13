@@ -2,6 +2,7 @@
 name = "ndatafusion"
 version = "0.0.1"
 edition = "2024"
+rust-version = "1.92"
 authors = ["George Lee Patterson <patterson.george@gmail.com>"]
 license = "Apache-2.0"
 repository = "https://github.com/georgeleepatterson/ndatafusion"
@@ -12,8 +13,27 @@ readme = "./README.md"
 keywords = ["datafusion", "linear-algebra", "ndarray", "machine-learning"]
 categories = ["mathematics", "science", "algorithms", "artificial-intelligence", "database"]
 
+[features]
+default = []
+test-utils = ["nabled/test-utils"]
+blas = ["nabled/blas"]
+lapack-provider = ["nabled/lapack-provider"]
+openblas-system = ["blas", "nabled/openblas-system"]
+openblas-static = ["blas", "nabled/openblas-static"]
+netlib-system = ["blas", "nabled/netlib-system"]
+netlib-static = ["blas", "nabled/netlib-static"]
+magma-system = ["lapack-provider", "nabled/magma-system"]
+accelerator-rayon = ["nabled/accelerator-rayon"]
+accelerator-wgpu = ["nabled/accelerator-wgpu"]
+
 [dependencies]
 datafusion = { git = "https://github.com/apache/datafusion.git", rev = "8d9b080882179b618a2057e042fc32865f6484b4", features = ["math_expressions"] }
+nabled = { version = "0.0.7", default-features = false, features = ["arrow"] }
+ndarrow = { version = "0.0.3" }
+arrow-schema = "58.0.0"
+ndarray = "0.17.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

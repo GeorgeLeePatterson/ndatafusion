@@ -1,4 +1,6 @@
 LOG := env('RUST_LOG', '')
+provider_features := env('NDATAFUSION_PROVIDER_FEATURES', 'openblas-system')
+provider_env_prefix := if os() == "macos" { "env PKG_CONFIG_PATH=/opt/homebrew/opt/openblas/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}} OPENBLAS_DIR=/opt/homebrew/opt/openblas" } else { "env" }
 
 default:
     @just --list
@@ -6,12 +8,12 @@ default:
 # --- TESTS ---
 
 test-unit:
-    RUST_LOG={{ LOG }} cargo test --lib -- --nocapture --show-output
+    RUST_LOG={{ LOG }} cargo test --no-default-features --lib -- --nocapture --show-output
 
 # Runs unit tests first then integration
 test:
-    RUST_LOG={{ LOG }} cargo test --lib -- --nocapture --show-output
-    RUST_LOG={{ LOG }} cargo test --test "e2e" -- --nocapture --show-output
+    RUST_LOG={{ LOG }} cargo test --no-default-features --lib -- --nocapture --show-output
+    RUST_LOG={{ LOG }} cargo test --no-default-features --test "e2e" -- --nocapture --show-output
 
 test-one test_name:
     RUST_LOG={{ LOG }} cargo test "{{ test_name }}" -- --nocapture --show-output
@@ -23,12 +25,12 @@ test-integration test_name='':
 
 coverage:
     cargo llvm-cov clean --workspace
-    cargo llvm-cov --no-report --ignore-filename-regex "(examples).*"
+    cargo llvm-cov --no-default-features --no-report --ignore-filename-regex "(examples).*"
     cargo llvm-cov report -vv --html --output-dir coverage --open
 
 coverage-lcov:
     cargo llvm-cov clean --workspace
-    cargo llvm-cov --lcov --no-report --ignore-filename-regex "(examples).*"
+    cargo llvm-cov --no-default-features --lcov --no-report --ignore-filename-regex "(examples).*"
     cargo llvm-cov report --lcov --output-path lcov.info
 
 # --- EXAMPLES ---
@@ -51,9 +53,17 @@ fmt-check:
 
 # Run checks CI will
 checks:
-    cargo +nightly fmt -- --check
-    cargo +nightly clippy --all-features --all-targets
-    cargo +stable clippy --all-features --all-targets -- -D warnings
+    cargo +nightly fmt --all -- --check --config-path ./rustfmt.toml
+    cargo +nightly clippy --workspace --no-default-features --all-targets -- -D warnings
+    cargo +nightly clippy --workspace --no-default-features --features lapack-provider --all-targets -- -D warnings
+    cargo +nightly clippy --workspace --no-default-features --features accelerator-rayon --all-targets -- -D warnings
+    cargo +nightly clippy --workspace --no-default-features --features accelerator-wgpu --all-targets -- -D warnings
+    {{ provider_env_prefix }} cargo +nightly clippy --workspace --no-default-features --features "{{ provider_features }} accelerator-rayon accelerator-wgpu" --all-targets -- -D warnings
+    cargo +stable clippy --workspace --no-default-features --all-targets -- -D warnings
+    cargo +stable clippy --workspace --no-default-features --features lapack-provider --all-targets -- -D warnings
+    cargo +stable clippy --workspace --no-default-features --features accelerator-rayon --all-targets -- -D warnings
+    cargo +stable clippy --workspace --no-default-features --features accelerator-wgpu --all-targets -- -D warnings
+    {{ provider_env_prefix }} cargo +stable clippy --workspace --no-default-features --features "{{ provider_features }} accelerator-rayon accelerator-wgpu" --all-targets -- -D warnings
     just -f {{ justfile() }} test
 
 # Initialize development environment for maintainers
