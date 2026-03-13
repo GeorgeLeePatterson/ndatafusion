@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::types::Float64Type;
 use datafusion::arrow::array::{
-    Array, FixedSizeListArray, Float64Array, Int8Array, Int64Array, StructArray,
+    Array, ArrayRef, FixedSizeListArray, Float64Array, Int8Array, Int64Array, ListArray,
+    StructArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::ScalarValue;
+use datafusion::common::utils::arrays_into_list_array;
 use datafusion::logical_expr::ColumnarValue;
 use ndarray::{Array1, Array2, Array3, Array4, Ix1, Ix2, Ix3, Ix4};
 
@@ -100,6 +102,39 @@ fn sparse_batch_rhs(name: &str) -> (FieldRef, StructArray) {
     (Arc::new(field), array)
 }
 
+fn float64_list_array(rows: Vec<Vec<f64>>) -> ListArray {
+    ListArray::from_iter_primitive::<Float64Type, _, _>(
+        rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
+    )
+}
+
+fn int32_list_array(rows: Vec<Vec<i32>>) -> ListArray {
+    ListArray::from_iter_primitive::<datafusion::arrow::array::types::Int32Type, _, _>(
+        rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
+    )
+}
+
+fn u32_list_array(rows: Vec<Vec<u32>>) -> ListArray {
+    ListArray::from_iter_primitive::<datafusion::arrow::array::types::UInt32Type, _, _>(
+        rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
+    )
+}
+
+fn scalar_float64_list(values: Vec<f64>) -> ScalarValue {
+    ScalarValue::List(Arc::new(float64_list_array(vec![values])))
+}
+
+fn scalar_int32_list(values: Vec<i32>) -> ScalarValue {
+    ScalarValue::List(Arc::new(int32_list_array(vec![values])))
+}
+
+fn scalar_nested_float64_list(rows: Vec<Vec<f64>>) -> ScalarValue {
+    let nested = float64_list_array(rows);
+    let wrapped =
+        arrays_into_list_array([Arc::new(nested) as ArrayRef]).expect("single nested list scalar");
+    ScalarValue::List(Arc::new(wrapped))
+}
+
 fn f64_array(values: &ColumnarValue) -> &Float64Array {
     let ColumnarValue::Array(array) = values else {
         panic!("expected array output");
@@ -177,6 +212,295 @@ fn invoke_udf_error(
     invoke_udf(udf, args, arg_fields, scalar_arguments, number_rows)
         .expect_err("expected UDF invocation to fail")
         .to_string()
+}
+
+#[test]
+fn constructor_udfs_build_fixed_shape_contracts() {
+    let make_vector_udf = udfs::make_vector_udf();
+    let make_matrix_udf = udfs::make_matrix_udf();
+    let make_tensor_udf = udfs::make_tensor_udf();
+
+    let vector_values = scalar_float64_list(vec![3.0, 4.0]);
+    let vector_field =
+        Arc::new(Field::new("values", DataType::new_list(DataType::Float64, false), false));
+    let (vector_return_field, vector_output) = invoke_udf(
+        &make_vector_udf,
+        vec![
+            ColumnarValue::Scalar(vector_values.clone()),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![Arc::clone(&vector_field), Arc::new(Field::new("dim", DataType::Int64, false))],
+        &[Some(vector_values), Some(ScalarValue::Int64(Some(2)))],
+        1,
+    )
+    .expect("make_vector");
+    assert_eq!(
+        vector_return_field.data_type(),
+        &DataType::new_fixed_size_list(DataType::Float64, 2, false)
+    );
+    let vector_output =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(fixed_size_list_array(&vector_output))
+            .expect("vector output");
+    assert_close(vector_output[[0, 0]], 3.0);
+    assert_close(vector_output[[0, 1]], 4.0);
+
+    let matrix_values = scalar_nested_float64_list(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+    let matrix_field = Arc::new(Field::new(
+        "matrix_values",
+        DataType::new_list(DataType::new_list(DataType::Float64, false), false),
+        false,
+    ));
+    let (matrix_return_field, matrix_output) = invoke_udf(
+        &make_matrix_udf,
+        vec![
+            ColumnarValue::Scalar(matrix_values.clone()),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::clone(&matrix_field),
+            Arc::new(Field::new("rows", DataType::Int64, false)),
+            Arc::new(Field::new("cols", DataType::Int64, false)),
+        ],
+        &[
+            Some(matrix_values),
+            Some(ScalarValue::Int64(Some(2))),
+            Some(ScalarValue::Int64(Some(2))),
+        ],
+        1,
+    )
+    .expect("make_matrix");
+    let matrix_output = fixed_shape_view3(&matrix_return_field, &matrix_output);
+    assert_close(matrix_output[[0, 0, 0]], 1.0);
+    assert_close(matrix_output[[0, 0, 1]], 2.0);
+    assert_close(matrix_output[[0, 1, 0]], 3.0);
+    assert_close(matrix_output[[0, 1, 1]], 4.0);
+
+    let tensor_values =
+        float64_list_array(vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]]);
+    let (tensor_return_field, tensor_output) = invoke_udf(
+        &make_tensor_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(tensor_values)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::new(Field::new(
+                "tensor_values",
+                DataType::new_list(DataType::Float64, false),
+                false,
+            )),
+            Arc::new(Field::new("dim0", DataType::Int64, false)),
+            Arc::new(Field::new("dim1", DataType::Int64, false)),
+        ],
+        &[None, Some(ScalarValue::Int64(Some(2))), Some(ScalarValue::Int64(Some(2)))],
+        2,
+    )
+    .expect("make_tensor");
+    let tensor_output = fixed_shape_view3(&tensor_return_field, &tensor_output);
+    assert_close(tensor_output[[0, 0, 0]], 1.0);
+    assert_close(tensor_output[[0, 1, 1]], 4.0);
+    assert_close(tensor_output[[1, 0, 0]], 5.0);
+    assert_close(tensor_output[[1, 1, 1]], 8.0);
+}
+
+#[test]
+fn constructor_udfs_build_variable_and_sparse_contracts() {
+    let make_variable_tensor_udf = udfs::make_variable_tensor_udf();
+    let make_csr_matrix_batch_udf = udfs::make_csr_matrix_batch_udf();
+
+    let variable_data = float64_list_array(vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0]]);
+    let variable_shape = int32_list_array(vec![vec![2, 2], vec![1, 3]]);
+    let (variable_return_field, variable_output) = invoke_udf(
+        &make_variable_tensor_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(variable_data)),
+            ColumnarValue::Array(Arc::new(variable_shape)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::new(Field::new("data", DataType::new_list(DataType::Float64, false), false)),
+            Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("rank", DataType::Int64, false)),
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(2)))],
+        2,
+    )
+    .expect("make_variable_tensor");
+    let mut variable_rows = variable_shape_rows(&variable_return_field, &variable_output);
+    let (_, tensor0) = variable_rows.next().expect("row0").expect("row0 tensor");
+    let tensor0 = tensor0.into_dimensionality::<Ix2>().expect("rank-2 tensor");
+    let (_, tensor1) = variable_rows.next().expect("row1").expect("row1 tensor");
+    let tensor1 = tensor1.into_dimensionality::<Ix2>().expect("rank-2 tensor");
+    assert_close(tensor0[[0, 0]], 1.0);
+    assert_close(tensor0[[1, 1]], 4.0);
+    assert_close(tensor1[[0, 0]], 5.0);
+    assert_close(tensor1[[0, 2]], 7.0);
+
+    let csr_shape = scalar_int32_list(vec![2, 3]);
+    let csr_row_ptrs = scalar_int32_list(vec![0, 2, 3]);
+    let csr_col_indices = ScalarValue::List(Arc::new(u32_list_array(vec![vec![0, 2, 1]])));
+    let csr_values = scalar_float64_list(vec![1.0, 2.0, 3.0]);
+    let (csr_return_field, csr_output) = invoke_udf(
+        &make_csr_matrix_batch_udf,
+        vec![
+            ColumnarValue::Scalar(csr_shape.clone()),
+            ColumnarValue::Scalar(csr_row_ptrs.clone()),
+            ColumnarValue::Scalar(csr_col_indices.clone()),
+            ColumnarValue::Scalar(csr_values.clone()),
+        ],
+        vec![
+            Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("row_ptrs", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("col_indices", DataType::new_list(DataType::UInt32, false), false)),
+            Arc::new(Field::new("values", DataType::new_list(DataType::Float64, false), false)),
+        ],
+        &[Some(csr_shape), Some(csr_row_ptrs), Some(csr_col_indices), Some(csr_values)],
+        1,
+    )
+    .expect("make_csr_matrix_batch");
+    let mut csr_rows = ndarrow::csr_matrix_batch_iter::<Float64Type>(
+        csr_return_field.as_ref(),
+        struct_array(&csr_output),
+    )
+    .expect("csr batch output");
+    let (_, csr0) = csr_rows.next().expect("row0").expect("row0 csr");
+    let csr0 = csr_to_dense(&csr0);
+    assert_eq!(csr0.shape(), &[2, 3]);
+    assert_close(csr0[[0, 0]], 1.0);
+    assert_close(csr0[[0, 2]], 2.0);
+    assert_close(csr0[[1, 1]], 3.0);
+}
+
+#[test]
+fn constructor_udfs_reject_invalid_shapes() {
+    let make_vector_udf = udfs::make_vector_udf();
+    let make_matrix_udf = udfs::make_matrix_udf();
+    let make_variable_tensor_udf = udfs::make_variable_tensor_udf();
+    let make_csr_matrix_batch_udf = udfs::make_csr_matrix_batch_udf();
+
+    let vector_error = invoke_udf_error(
+        &make_vector_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(float64_list_array(vec![vec![1.0, 2.0, 3.0]]))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::new(Field::new("values", DataType::new_list(DataType::Float64, false), false)),
+            Arc::new(Field::new("dim", DataType::Int64, false)),
+        ],
+        &[None, Some(ScalarValue::Int64(Some(2)))],
+        1,
+    );
+    assert!(vector_error.contains("expected length 2"));
+
+    let matrix_error = invoke_udf_error(
+        &make_matrix_udf,
+        vec![
+            ColumnarValue::Scalar(scalar_nested_float64_list(vec![vec![1.0], vec![2.0, 3.0]])),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::new(Field::new(
+                "matrix_values",
+                DataType::new_list(DataType::new_list(DataType::Float64, false), false),
+                false,
+            )),
+            Arc::new(Field::new("rows", DataType::Int64, false)),
+            Arc::new(Field::new("cols", DataType::Int64, false)),
+        ],
+        &[
+            Some(scalar_nested_float64_list(vec![vec![1.0], vec![2.0, 3.0]])),
+            Some(ScalarValue::Int64(Some(2))),
+            Some(ScalarValue::Int64(Some(2))),
+        ],
+        1,
+    );
+    assert!(matrix_error.contains("nested row 0 expected width 2"));
+
+    let variable_error = invoke_udf_error(
+        &make_variable_tensor_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(float64_list_array(vec![vec![1.0, 2.0]]))),
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![vec![-1, 2]]))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::new(Field::new("data", DataType::new_list(DataType::Float64, false), false)),
+            Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("rank", DataType::Int64, false)),
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(2)))],
+        1,
+    );
+    assert!(variable_error.contains("negative dimension"));
+
+    let csr_error = invoke_udf_error(
+        &make_csr_matrix_batch_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![vec![2, 3]]))),
+            ColumnarValue::Array(Arc::new(int32_list_array(vec![vec![0, 1]]))),
+            ColumnarValue::Array(Arc::new(u32_list_array(vec![vec![0, 1, 2]]))),
+            ColumnarValue::Array(Arc::new(float64_list_array(vec![vec![1.0, 2.0, 3.0]]))),
+        ],
+        vec![
+            Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("row_ptrs", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("col_indices", DataType::new_list(DataType::UInt32, false), false)),
+            Arc::new(Field::new("values", DataType::new_list(DataType::Float64, false), false)),
+        ],
+        &[None, None, None, None],
+        1,
+    );
+    assert!(csr_error.contains("row_ptrs"));
+}
+
+#[test]
+fn constructor_udfs_support_empty_batches() {
+    let make_variable_tensor_udf = udfs::make_variable_tensor_udf();
+    let make_csr_matrix_batch_udf = udfs::make_csr_matrix_batch_udf();
+
+    let (variable_return_field, variable_output) = invoke_udf(
+        &make_variable_tensor_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(float64_list_array(Vec::new()))),
+            ColumnarValue::Array(Arc::new(int32_list_array(Vec::new()))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+        ],
+        vec![
+            Arc::new(Field::new("data", DataType::new_list(DataType::Float64, false), false)),
+            Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("rank", DataType::Int64, false)),
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(2)))],
+        0,
+    )
+    .expect("empty variable tensor batch");
+    assert_eq!(variable_return_field.extension_type_name(), Some("arrow.variable_shape_tensor"));
+    assert_eq!(struct_array(&variable_output).len(), 0);
+
+    let (csr_return_field, csr_output) = invoke_udf(
+        &make_csr_matrix_batch_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(int32_list_array(Vec::new()))),
+            ColumnarValue::Array(Arc::new(int32_list_array(Vec::new()))),
+            ColumnarValue::Array(Arc::new(u32_list_array(Vec::new()))),
+            ColumnarValue::Array(Arc::new(float64_list_array(Vec::new()))),
+        ],
+        vec![
+            Arc::new(Field::new("shape", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("row_ptrs", DataType::new_list(DataType::Int32, false), false)),
+            Arc::new(Field::new("col_indices", DataType::new_list(DataType::UInt32, false), false)),
+            Arc::new(Field::new("values", DataType::new_list(DataType::Float64, false), false)),
+        ],
+        &[None, None, None, None],
+        0,
+    )
+    .expect("empty csr batch");
+    assert_eq!(csr_return_field.extension_type_name(), Some("ndarrow.csr_matrix_batch"));
+    assert_eq!(struct_array(&csr_output).len(), 0);
 }
 
 #[test]

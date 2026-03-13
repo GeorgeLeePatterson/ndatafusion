@@ -2,6 +2,10 @@ use std::sync::Arc;
 
 use datafusion::logical_expr::ScalarUDF;
 
+pub use crate::udf::constructors::{
+    make_csr_matrix_batch_udf, make_matrix_udf, make_tensor_udf, make_variable_tensor_udf,
+    make_vector_udf,
+};
 pub use crate::udf::decomposition::{
     matrix_cholesky_inverse_udf, matrix_cholesky_udf, matrix_determinant_udf, matrix_inverse_udf,
     matrix_log_determinant_udf, matrix_lu_udf, matrix_qr_udf, matrix_svd_udf,
@@ -29,6 +33,11 @@ pub use crate::udf::vector::{
 #[must_use]
 pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        make_vector_udf(),
+        make_matrix_udf(),
+        make_tensor_udf(),
+        make_variable_tensor_udf(),
+        make_csr_matrix_batch_udf(),
         vector_l2_norm_udf(),
         vector_dot_udf(),
         vector_cosine_similarity_udf(),
@@ -73,6 +82,6 @@ mod tests {
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
-        assert_eq!(all_default_functions().len(), 35);
+        assert_eq!(all_default_functions().len(), 40);
     }
 }

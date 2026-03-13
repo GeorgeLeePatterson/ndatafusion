@@ -37,12 +37,15 @@ Feature forwarding follows `nabled` directly:
 The current implementation is no longer scaffold-only. `ndatafusion` now registers the first
 substantial direct batch-native catalog across:
 
-1. dense vector row ops
-2. dense matrix matmul plus LU and Cholesky solves
-3. struct-valued LU, Cholesky, QR, SVD, and PCA workflows
-4. matrix inverse, determinant, log-determinant, centering, covariance, and correlation
-5. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
-6. fixed-shape and variable-shape tensor last-axis reductions, normalization, and batched products
-7. matrix column means and linear regression
+1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
+   variable-shape tensor, and CSR sparse-matrix batches
+2. dense vector row ops
+3. dense matrix matmul plus LU and Cholesky solves
+4. struct-valued LU, Cholesky, QR, SVD, and PCA workflows
+5. matrix inverse, determinant, log-determinant, centering, covariance, and correlation
+6. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
+7. fixed-shape and variable-shape tensor last-axis reductions, normalization, and batched products
+8. matrix column means and linear regression
 
-The next milestone is SQL constructors/normalizers plus broader publish hardening and examples.
+The next milestone is publish hardening, examples, and residual admitted parity on top of the
+current `f64`-first constructor-backed catalog.

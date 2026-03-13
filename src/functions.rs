@@ -7,6 +7,34 @@ use datafusion::logical_expr::Expr;
 use crate::udfs;
 
 #[must_use]
+pub fn make_vector(values: Expr, dim: Expr) -> Expr {
+    udfs::make_vector_udf().call(vec![values, dim])
+}
+
+#[must_use]
+pub fn make_matrix(values: Expr, rows: Expr, cols: Expr) -> Expr {
+    udfs::make_matrix_udf().call(vec![values, rows, cols])
+}
+
+#[must_use]
+pub fn make_tensor(values: Expr, dims: Vec<Expr>) -> Expr {
+    let mut args = Vec::with_capacity(dims.len() + 1);
+    args.push(values);
+    args.extend(dims);
+    udfs::make_tensor_udf().call(args)
+}
+
+#[must_use]
+pub fn make_variable_tensor(data: Expr, shape: Expr, rank: Expr) -> Expr {
+    udfs::make_variable_tensor_udf().call(vec![data, shape, rank])
+}
+
+#[must_use]
+pub fn make_csr_matrix_batch(shape: Expr, row_ptrs: Expr, col_indices: Expr, values: Expr) -> Expr {
+    udfs::make_csr_matrix_batch_udf().call(vec![shape, row_ptrs, col_indices, values])
+}
+
+#[must_use]
 pub fn vector_l2_norm(vector: Expr) -> Expr { udfs::vector_l2_norm_udf().call(vec![vector]) }
 
 #[must_use]
@@ -169,7 +197,8 @@ mod tests {
     use datafusion::logical_expr::Expr;
 
     use super::{
-        linear_regression, matrix_center_columns, matrix_cholesky, matrix_cholesky_inverse,
+        linear_regression, make_csr_matrix_batch, make_matrix, make_tensor, make_variable_tensor,
+        make_vector, matrix_center_columns, matrix_cholesky, matrix_cholesky_inverse,
         matrix_cholesky_solve, matrix_column_means, matrix_correlation, matrix_covariance,
         matrix_determinant, matrix_inverse, matrix_log_determinant, matrix_lu, matrix_lu_solve,
         matrix_matmul, matrix_pca, matrix_qr, matrix_svd, sparse_matmat_dense,
@@ -193,6 +222,36 @@ mod tests {
 
     #[test]
     fn constructor_helpers_wrap_the_expected_udfs() {
+        let one = literal_i64(1);
+        let two = literal_i64(2);
+        let three = literal_i64(3);
+        let four = literal_i64(4);
+
+        assert_scalar_function(make_vector(one.clone(), two.clone()), "make_vector", 2);
+        assert_scalar_function(
+            make_matrix(one.clone(), two.clone(), three.clone()),
+            "make_matrix",
+            3,
+        );
+        assert_scalar_function(
+            make_tensor(one.clone(), vec![two.clone(), three.clone()]),
+            "make_tensor",
+            3,
+        );
+        assert_scalar_function(
+            make_variable_tensor(one.clone(), two.clone(), three.clone()),
+            "make_variable_tensor",
+            3,
+        );
+        assert_scalar_function(
+            make_csr_matrix_batch(one.clone(), two.clone(), three.clone(), four.clone()),
+            "make_csr_matrix_batch",
+            4,
+        );
+    }
+
+    #[test]
+    fn numerical_helpers_wrap_the_expected_udfs() {
         let one = literal_i64(1);
         let two = literal_i64(2);
         let three = literal_i64(3);

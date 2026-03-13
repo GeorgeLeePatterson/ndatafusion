@@ -17,10 +17,12 @@ top of the released upstream contracts.
    shared metadata/error helpers, and domain modules.
 8. A substantial `f64`-first numerical DataFusion UDF catalog is now implemented directly as the
    crate surface.
-9. The current catalog now has constructor/helper tests, contract-edge validation, successful-path
-   domain coverage, and line coverage above 90%.
-10. The active ingress model remains concept-first: each mathematical object family needs one
-   canonical standalone ingress and one canonical `rows-of-X` batch carrier.
+9. The current catalog now includes SQL constructors for canonical dense vector, dense matrix,
+   fixed-shape tensor, variable-shape tensor, and CSR sparse-batch contracts.
+10. The current catalog now has constructor/helper tests, contract-edge validation, successful-path
+    domain coverage, and line coverage above 90%.
+11. The active ingress model remains concept-first: each mathematical object family needs one
+    canonical standalone ingress and one canonical `rows-of-X` batch carrier.
 
 ## Current Repository Reality
 
@@ -32,7 +34,9 @@ top of the released upstream contracts.
    tensor workflows whenever `nabled::arrow` exposes the needed batch carrier directly.
 5. The fallback generic cell-codec layer still does not exist; residual unsupported workflows are
    currently handled case-by-case or remain unimplemented.
-6. Current validation covers both successful batch-native paths and representative type, shape,
+6. SQL-native constructor ingress now exists from ordinary `List` values into the canonical
+   `f64` vector, matrix, tensor, variable-tensor, and CSR sparse-batch contracts.
+7. Current validation covers both successful batch-native paths and representative type, shape,
    scalar-argument, and batch-length failure contracts.
 
 ## Constraints In Force
@@ -78,6 +82,6 @@ Not ready.
 
 Blocked by:
 
-1. missing SQL constructors and normalizers
-2. missing examples and richer integration coverage
-3. missing publish hardening and release-ready documentation
+1. missing examples and richer integration coverage
+2. missing publish hardening and release-ready documentation
+3. residual admitted parity work that still fits the `f64`-first v1 contract

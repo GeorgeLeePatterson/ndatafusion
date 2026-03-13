@@ -61,6 +61,9 @@
 28. `ndatafusion` should not attempt to expose generic Rust-callback differentiation APIs directly
     as scalar UDFs; if a richer expression-driven differentiation model is added later, it should
     be an explicit planner/rewrite design, not an accidental scalar-UDF overload.
+29. The first constructor surface is explicit `make_*` scalar UDFs over SQL `List` values plus
+    scalar dimensions or shape lists; planner sugar and alternate constructor syntax are deferred
+    until the base contracts stabilize.
 
 ## Cross-Layer Contract Model
 

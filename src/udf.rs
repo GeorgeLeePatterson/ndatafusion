@@ -1,4 +1,5 @@
 pub(crate) mod common;
+pub mod constructors;
 pub mod decomposition;
 pub mod matrix;
 pub mod ml;

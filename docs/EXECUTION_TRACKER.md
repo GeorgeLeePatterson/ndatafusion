@@ -27,7 +27,9 @@ codebase.
 5. `ndatafusion` now depends on published `nabled 0.0.7` and `ndarrow 0.0.3`.
 6. A substantial `f64`-first numerical DataFusion catalog now exists across vector, matrix,
    decomposition, sparse, tensor, and ML/stat slices.
-7. The next local work is SQL constructors plus publish hardening over the expanded catalog.
+7. The catalog now includes SQL-native constructors for the canonical `f64` vector, matrix,
+   tensor, variable-tensor, and CSR sparse-batch contracts.
+8. The next local work is publish hardening and residual admitted parity over the expanded catalog.
 
 ## V1 Publish Gate (Ordered, Required)
 
@@ -87,30 +89,34 @@ order:
     - sparse batch dense matmat, transpose, and sparse matmat
     - fixed-shape and variable-shape tensor norm/normalize/dot/matmul expansions
     - the catalog now exposes 35 registered scalar UDFs with coverage still above 90%
+12. `D-012`: `N-008` is now complete on the current `f64`-first contract:
+    - `make_vector`
+    - `make_matrix`
+    - `make_tensor`
+    - `make_variable_tensor`
+    - `make_csr_matrix_batch`
+    - constructor success/failure coverage now exists for scalar-literal-style and array-column
+      inputs
 
 ## Next
 
-1. `N-008` (`Layer 3`, `ndatafusion`): Add SQL constructors and normalizers for the canonical
-   numerical value contracts.
-2. `N-009` (`Layer 3`, `ndatafusion`): Harden the new catalog with examples, richer integration
+1. `N-009` (`Layer 3`, `ndatafusion`): Harden the new catalog with examples, richer integration
    coverage, and publish-ready docs/release metadata.
-3. `N-010` (`Layer 3`, `ndatafusion`): Finish the residual admitted type/domain parity work that
+2. `N-010` (`Layer 3`, `ndatafusion`): Finish the residual admitted type/domain parity work that
    still fits the `f64`-first, SQL-natural v1 contract while preserving direct batch delegation on
    hot paths.
 
 ## Needed
 
-1. Constructor and normalization functions that let SQL callers build canonical numerical values
-   from nested literals or arrays without bespoke Rust setup.
-2. Explicit publish hardening: README examples, docs.rs viability, release notes, and coverage
+1. Explicit publish hardening: README examples, docs.rs viability, release notes, and coverage
    proof over the admitted v1 surface.
-3. A post-v1 decision on whether UDAFs, window functions, planners, or rewrites are worth
+2. A post-v1 decision on whether UDAFs, window functions, planners, or rewrites are worth
    introducing for dataset-level or ergonomic workflows.
-4. A post-v1 performance pass to reduce fallback lift/assembly overhead where direct batch
+3. A post-v1 performance pass to reduce fallback lift/assembly overhead where direct batch
    delegation is still impossible.
 
 ## Round Scope Lock
 
 1. This round starts local `ndatafusion` implementation after the upstream prerequisite releases.
-2. The next execution round should start at `N-008`: constructors and normalizers.
+2. The next execution round should start at `N-009`: publish hardening and examples.
 3. Preserve the concept-first contract while the current catalog expands.

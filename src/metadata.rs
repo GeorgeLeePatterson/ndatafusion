@@ -132,6 +132,26 @@ pub(crate) fn variable_shape_tensor_field(
     Ok(Arc::new(field))
 }
 
+pub(crate) fn float64_csr_matrix_batch_field(
+    name: &str,
+    nullable: bool,
+) -> datafusion::common::Result<FieldRef> {
+    let data_type = DataType::Struct(
+        vec![
+            Field::new("shape", DataType::new_fixed_size_list(DataType::Int32, 2, false), false),
+            Field::new("row_ptrs", DataType::new_list(DataType::Int32, false), false),
+            Field::new("col_indices", DataType::new_list(DataType::UInt32, false), false),
+            Field::new("values", DataType::new_list(DataType::Float64, false), false),
+        ]
+        .into(),
+    );
+    let extension = CsrMatrixBatchExtension::try_new(&data_type, ())
+        .map_err(|error| plan_error(name, error))?;
+    let mut field = Field::new(name, data_type, nullable);
+    field.try_with_extension_type(extension).map_err(|error| plan_error(name, error))?;
+    Ok(Arc::new(field))
+}
+
 pub(crate) fn parse_float64_vector_field(
     field: &FieldRef,
     function_name: &str,
@@ -238,11 +258,13 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_schema::extension::ExtensionType;
     use datafusion::arrow::datatypes::{DataType, Field};
     use ndarray::{Array1, Array2};
+    use ndarrow::CsrMatrixBatchExtension;
 
     use super::{
-        field_like, fixed_shape_tensor_field, float64_scalar_field,
+        field_like, fixed_shape_tensor_field, float64_csr_matrix_batch_field, float64_scalar_field,
         parse_float64_matrix_batch_field, parse_float64_tensor_batch_field,
         parse_float64_variable_shape_tensor_field, parse_float64_vector_field,
         require_float64_csr_matrix_batch_field, struct_field, variable_shape_tensor_field,
@@ -257,6 +279,7 @@ mod tests {
         let tensor = fixed_shape_tensor_field("tensor", &[2, 3], false).expect("tensor field");
         let variable =
             variable_shape_tensor_field("ragged", 2, Some(&[Some(2), None]), true).expect("field");
+        let sparse = float64_csr_matrix_batch_field("sparse", false).expect("sparse field");
 
         assert_eq!(scalar.data_type(), &DataType::Float64);
         assert!(scalar.is_nullable());
@@ -269,6 +292,10 @@ mod tests {
         assert_eq!(
             variable.extension_type_name().expect("variable extension name"),
             "arrow.variable_shape_tensor"
+        );
+        assert_eq!(
+            sparse.extension_type_name().expect("sparse extension name"),
+            CsrMatrixBatchExtension::NAME
         );
     }
 

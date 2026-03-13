@@ -40,7 +40,7 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 | Sparse surface | CSR-aware DataFusion contracts and wrappers | Partial | unit tests | Sparse batch matvec, dense matmat, transpose, and sparse matmat now exist over `ndarrow.csr_matrix_batch`. |
 | Tensor surface | fixed-shape tensor contracts and wrappers | Partial | unit tests | Fixed-shape and variable-shape last-axis reductions, normalization, and batched products now exist on the admitted `f64` surface. |
 | ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests | Column means, centering, covariance, correlation, PCA, and linear regression now exist; callback/config-heavy workflows still remain. |
-| SQL usability | constructors and normalizers from SQL-friendly nested values into canonical contracts | Missing | No | Important for real SQL use, not optional polish. |
+| SQL usability | constructors and normalizers from SQL-friendly nested values into canonical contracts | Implemented | unit tests | `make_vector`, `make_matrix`, `make_tensor`, `make_variable_tensor`, and `make_csr_matrix_batch` now cover the admitted `f64` canonical contracts from SQL-style `List` values plus scalar dimensions. |
 | Planner layer | function rewrites or expression planners | Missing | No | Optional for v1 unless required by constructors or ergonomics. |
 | Hardening | examples, integration coverage, docs, and publish checklist readiness | Partial | `just checks` + coverage | Contract-edge unit coverage and the current coverage gate now pass, but publish-ready examples and release hardening are still missing. |
 
@@ -88,9 +88,8 @@ extension-crate scaffold.
 
 Primary remaining work:
 
-1. Add constructors and normalizers for SQL-facing canonical numerical values.
-2. Finish the residual admitted catalog while preferring direct batch delegation over bespoke lifting.
-3. Harden for publish with examples, broader integration coverage, and release-ready docs.
+1. Finish the residual admitted catalog while preferring direct batch delegation over bespoke lifting.
+2. Harden for publish with examples, broader integration coverage, and release-ready docs.
 
 ## Execution Order Driven By This Matrix
 
