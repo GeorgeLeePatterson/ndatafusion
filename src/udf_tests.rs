@@ -409,6 +409,21 @@ fn assert_tensor_vector_struct_output(
     assert_close(scaling[[0, 1]], 1.0);
 }
 
+fn assert_pca_scores_from_struct<'a>(
+    return_field: &'a FieldRef,
+    output: &'a ColumnarValue,
+) -> ndarray::ArrayView3<'a, f64> {
+    let DataType::Struct(fields) = return_field.data_type() else {
+        panic!("expected PCA struct return");
+    };
+    let output = struct_array(output);
+    let scores = output.column(4).as_any().downcast_ref::<FixedSizeListArray>().expect("scores");
+    ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[4], scores)
+        .expect("scores")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 scores")
+}
+
 #[test]
 fn constructor_udfs_build_fixed_shape_contracts() {
     let make_vector_udf = udfs::make_vector_udf();
@@ -913,6 +928,41 @@ fn sparse_matvec_returns_variable_shape_vectors() {
     assert_close(row0[[1]], 6.0);
     assert_close(row1[[0]], 8.0);
     assert_close(row1[[1]], 16.0);
+}
+
+#[test]
+fn sparse_lu_solve_returns_variable_shape_vectors() {
+    let (sparse_field, sparse) = ndarrow::csr_batch_to_extension_array(
+        "sparse_solve",
+        vec![[2, 2], [2, 2]],
+        vec![vec![0, 2, 4], vec![0, 1, 2]],
+        vec![vec![0, 1, 0, 1], vec![0, 1]],
+        vec![vec![4.0, 1.0, 1.0, 3.0], vec![2.0, 5.0]],
+    )
+    .map(|(field, array)| (Arc::new(field), array))
+    .expect("sparse solve batch");
+    let (rhs_field, rhs) = ragged_vectors("rhs", vec![vec![1.0, 2.0], vec![4.0, 10.0]]);
+    let sparse_lu_solve_udf = udfs::sparse_lu_solve_udf();
+    let (return_field, solved) = invoke_udf(
+        &sparse_lu_solve_udf,
+        vec![ColumnarValue::Array(Arc::new(sparse)), ColumnarValue::Array(Arc::new(rhs))],
+        vec![sparse_field, rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("sparse_lu_solve");
+    let solved = struct_array(&solved);
+    let mut solved_iter =
+        ndarrow::variable_shape_tensor_iter::<Float64Type>(return_field.as_ref(), solved)
+            .expect("ragged tensor output");
+    let (_, first) = solved_iter.next().expect("row 0").expect("row 0 view");
+    let first = first.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    let (_, second) = solved_iter.next().expect("row 1").expect("row 1 view");
+    let second = second.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    assert_close(first[[0]], 1.0 / 11.0);
+    assert_close(first[[1]], 7.0 / 11.0);
+    assert_close(second[[0]], 2.0);
+    assert_close(second[[1]], 2.0);
 }
 
 #[test]
@@ -2111,10 +2161,10 @@ fn matrix_stats_and_pca_udfs_cover_batch_outputs() {
     assert_close(correlation[[0, 0, 1]], 1.0);
     assert_close(correlation[[1, 0, 1]], -0.5);
 
-    let (pca_return_field, pca) = invoke_udf(
+    let (pca_return_field, pca_output) = invoke_udf(
         &pca_udf,
-        vec![ColumnarValue::Array(Arc::new(matrices))],
-        vec![field],
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(&field)],
         &[None],
         2,
     )
@@ -2122,7 +2172,7 @@ fn matrix_stats_and_pca_udfs_cover_batch_outputs() {
     let DataType::Struct(pca_fields) = pca_return_field.data_type() else {
         panic!("expected PCA struct return");
     };
-    let pca = struct_array(&pca);
+    let pca = struct_array(&pca_output);
     let components =
         pca.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("components");
     let components =
@@ -2157,6 +2207,106 @@ fn matrix_stats_and_pca_udfs_cover_batch_outputs() {
     assert_close(components[[0, 0, 1]].abs(), 1.0 / 2.0_f64.sqrt());
     assert_close(scores[[0, 1, 0]], 0.0);
     assert_close(scores[[0, 1, 1]], 0.0);
+}
+
+#[test]
+fn matrix_pca_application_udfs_cover_batch_outputs() {
+    let (field, matrices) =
+        matrix_batch("stats", [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], [[1.0, 0.0], [0.0, 1.0], [
+            1.0, 1.0,
+        ]]]);
+    let pca_udf = udfs::matrix_pca_udf();
+    let pca_transform_udf = udfs::matrix_pca_transform_udf();
+    let pca_inverse_udf = udfs::matrix_pca_inverse_transform_udf();
+
+    let (pca_return_field, pca_output) = invoke_udf(
+        &pca_udf,
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(&field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_pca");
+    let scores = assert_pca_scores_from_struct(&pca_return_field, &pca_output).to_owned();
+    let pca = struct_array(&pca_output).clone();
+
+    let (transformed_field, transformed_output) = invoke_udf(
+        &pca_transform_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(pca.clone())),
+        ],
+        vec![Arc::clone(&field), Arc::clone(&pca_return_field)],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_pca_transform");
+    let transformed = fixed_shape_view3(&transformed_field, &transformed_output);
+    assert_close(transformed[[0, 0, 0]], scores[[0, 0, 0]]);
+    assert_close(transformed[[0, 2, 0]], scores[[0, 2, 0]]);
+    assert_close(transformed[[1, 1, 1]], scores[[1, 1, 1]]);
+    let ColumnarValue::Array(transformed_array) = &transformed_output else {
+        panic!("expected array output");
+    };
+
+    let (reconstructed_field, reconstructed) = invoke_udf(
+        &pca_inverse_udf,
+        vec![
+            ColumnarValue::Array(Arc::clone(transformed_array)),
+            ColumnarValue::Array(Arc::new(pca.clone())),
+        ],
+        vec![transformed_field, Arc::clone(&pca_return_field)],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_pca_inverse_transform");
+    let reconstructed = fixed_shape_view3(&reconstructed_field, &reconstructed);
+    assert_close(reconstructed[[0, 0, 0]], 1.0);
+    assert_close(reconstructed[[0, 2, 1]], 6.0);
+    assert_close(reconstructed[[1, 0, 0]], 1.0);
+    assert_close(reconstructed[[1, 2, 1]], 1.0);
+}
+
+#[test]
+fn matrix_pca_application_udfs_validate_contracts() {
+    let pca_udf = udfs::matrix_pca_udf();
+    let pca_transform_udf = udfs::matrix_pca_transform_udf();
+    let pca_inverse_udf = udfs::matrix_pca_inverse_transform_udf();
+    let (fit_field, fit_matrices) = matrix_batch("fit", [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]]);
+    let (wide_field, wide_matrices) =
+        matrix_batch("wide", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]);
+    let (short_score_field, short_scores) = matrix_batch("short_scores", [[[1.0], [0.0], [1.0]]]);
+
+    let (pca_field, pca_output) = invoke_udf(
+        &pca_udf,
+        vec![ColumnarValue::Array(Arc::new(fit_matrices.clone()))],
+        vec![Arc::clone(&fit_field)],
+        &[None],
+        1,
+    )
+    .expect("matrix_pca");
+    let pca = struct_array(&pca_output).clone();
+
+    let transform_error = invoke_udf_error(
+        &pca_transform_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(wide_matrices)),
+            ColumnarValue::Array(Arc::new(pca.clone())),
+        ],
+        vec![wide_field, Arc::clone(&pca_field)],
+        &[None, None],
+        1,
+    );
+    let inverse_error = invoke_udf_error(
+        &pca_inverse_udf,
+        vec![ColumnarValue::Array(Arc::new(short_scores)), ColumnarValue::Array(Arc::new(pca))],
+        vec![short_score_field, pca_field],
+        &[None, None],
+        1,
+    );
+
+    assert!(transform_error.contains("matrix feature width mismatch"));
+    assert!(inverse_error.contains("score width mismatch"));
 }
 
 #[test]
@@ -3751,8 +3901,20 @@ fn sparse_udfs_cover_float32_branches() {
     ]);
     let (sparse_field, sparse) = sparse_batch_f32("sparse");
     let (sparse_rhs_field, sparse_rhs) = sparse_batch_rhs_f32("sparse_rhs");
+    let (sparse_solve_field, sparse_solve) = ndarrow::csr_batch_to_extension_array(
+        "sparse_solve",
+        vec![[2, 2]],
+        vec![vec![0, 2, 4]],
+        vec![vec![0, 1, 0, 1]],
+        vec![vec![4.0_f32, 1.0, 1.0, 3.0]],
+    )
+    .map(|(field, array)| (Arc::new(field), array))
+    .expect("sparse solve batch");
+    let (sparse_solve_rhs_field, sparse_solve_rhs) =
+        ragged_vectors_f32("rhs", vec![vec![1.0, 2.0]]);
     for udf in [
         udfs::sparse_matvec_udf(),
+        udfs::sparse_lu_solve_udf(),
         udfs::sparse_matmat_dense_udf(),
         udfs::sparse_transpose_udf(),
         udfs::sparse_matmat_sparse_udf(),
@@ -3767,6 +3929,11 @@ fn sparse_udfs_cover_float32_branches() {
                 ColumnarValue::Array(Arc::new(sparse.clone())),
                 ColumnarValue::Array(Arc::new(dense_matrices.clone())),
             ]
+        } else if udf.name() == "sparse_lu_solve" {
+            vec![
+                ColumnarValue::Array(Arc::new(sparse_solve.clone())),
+                ColumnarValue::Array(Arc::new(sparse_solve_rhs.clone())),
+            ]
         } else if udf.name() == "sparse_transpose" {
             vec![ColumnarValue::Array(Arc::new(sparse.clone()))]
         } else {
@@ -3777,6 +3944,8 @@ fn sparse_udfs_cover_float32_branches() {
         };
         let fields = if udf.name() == "sparse_matvec" {
             vec![Arc::clone(&sparse_field), Arc::clone(&ragged_vector_field)]
+        } else if udf.name() == "sparse_lu_solve" {
+            vec![Arc::clone(&sparse_solve_field), Arc::clone(&sparse_solve_rhs_field)]
         } else if udf.name() == "sparse_matmat_dense" {
             vec![Arc::clone(&sparse_field), Arc::clone(&dense_field)]
         } else if udf.name() == "sparse_transpose" {
@@ -3817,6 +3986,40 @@ fn ml_udfs_cover_float32_branches() {
             ColumnarValue::Array(_) => {}
             ColumnarValue::Scalar(_) => panic!("expected array output"),
         }
+    }
+
+    let (pca_field, pca_output) = invoke_udf(
+        &udfs::matrix_pca_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(&matrix_field)],
+        &[None],
+        1,
+    )
+    .expect("matrix_pca f32");
+    let pca_array = struct_array(&pca_output).clone();
+    let (projected_field, projected_output) = invoke_udf(
+        &udfs::matrix_pca_transform_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(pca_array.clone())),
+        ],
+        vec![Arc::clone(&matrix_field), Arc::clone(&pca_field)],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_pca_transform f32");
+    assert_eq!(array_data_type(&projected_output), projected_field.data_type());
+    let (_inverse_field, inverse_output) = invoke_udf(
+        &udfs::matrix_pca_inverse_transform_udf(),
+        vec![projected_output, ColumnarValue::Array(Arc::new(pca_array))],
+        vec![projected_field, pca_field],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_pca_inverse_transform f32");
+    match inverse_output {
+        ColumnarValue::Array(_) => {}
+        ColumnarValue::Scalar(_) => panic!("expected array output"),
     }
 
     let (regression_field, regression_output) = invoke_udf(

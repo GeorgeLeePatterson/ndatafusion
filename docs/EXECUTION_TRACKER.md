@@ -32,8 +32,8 @@ codebase.
    tensor, variable-tensor, and CSR sparse-batch contracts.
 8. README examples and end-to-end SQL integration coverage now exist for the constructor-backed
    catalog.
-9. Publish hardening is now in place for the current git-consumed release posture, and the next
-   local work is residual admitted parity over the expanded catalog.
+9. Publish hardening is now in place for the current git-consumed release posture, and the
+   non-controversial real-valued catalog is now complete on the current constructor-backed surface.
 
 ## V1 Publish Gate (Ordered, Required)
 
@@ -191,25 +191,46 @@ order:
     - the current catalog now exposes 75 registered scalar UDFs
     - direct unit coverage, float32 branch coverage, square-contract validation, and
       constructor-backed SQL integration coverage now exercise the balancing helper slice
+24. `D-024`: `N-010` has advanced again on PCA-application parity:
+    - `matrix_pca_transform` now exists over canonical matrix batches plus the existing PCA struct
+      contract
+    - `matrix_pca_inverse_transform` now exists over canonical score-matrix batches plus the same
+      PCA struct contract
+    - direct unit coverage, float32 branch coverage, contract-edge validation, and
+      constructor-backed SQL integration coverage now exercise the PCA application slice
+25. `D-025`: `N-010` has advanced again on sparse direct-solve parity:
+    - `sparse_lu_solve` now exists over canonical `ndarrow.csr_matrix_batch` inputs plus rank-1
+      variable-shape tensor RHS batches
+    - direct unit coverage, float32 branch coverage, contract-edge validation, and
+      constructor-backed SQL integration coverage now exercise the sparse direct-solve slice
+26. `D-026`: The non-controversial, SQL-natural, real-valued constructor-backed v1 surface is now
+    complete for the current git-consumed release posture:
+    - the current catalog now exposes 78 registered scalar UDFs
+    - `just checks` passes on the checkpoint tree
+    - line coverage remains above the repository gate
+    - remaining work is now intentionally controversial, post-v1, or blocked on upstream
+      DataFusion publication
 
 ## Next
 
-1. `N-010` (`Layer 3`, `ndatafusion`): Finish the residual admitted type/domain parity work that
-   still fits the current real-valued, SQL-natural v1 contract while preserving direct batch
-   delegation on hot paths.
+1. `N-011` (`Layer 3`, `ndatafusion`): Plan the controversial or post-v1 surface explicitly:
+   - complex-valued result contracts,
+   - callback-driven differentiation / optimization,
+   - stateful sparse factorization reuse,
+   - richer planner, UDAF, window, or table-function surfaces.
 
 ## Needed
 
 1. Replace the temporary DataFusion git dependency once a published Arrow-58-compatible release
    exists on crates.io.
-2. A post-v1 decision on whether UDAFs, window functions, planners, or rewrites are worth
-   introducing for dataset-level or ergonomic workflows.
+2. Decide which controversial or post-v1 capabilities are actually worth admitting after the
+   current real-valued release checkpoint.
 3. A post-v1 performance pass to reduce fallback lift/assembly overhead where direct batch
    delegation is still impossible.
 
 ## Round Scope Lock
 
 1. This round starts local `ndatafusion` implementation after the upstream prerequisite releases.
-2. The next execution round should continue `N-010`: residual admitted parity on the current
-   real-valued catalog.
-3. Preserve the concept-first contract while the current catalog expands.
+2. The next execution round should start `N-011`: plan the controversial or post-v1 surface, not
+   more non-controversial catalog expansion.
+3. Preserve the concept-first contract while release hardening and post-v1 planning continue.

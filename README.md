@@ -79,7 +79,7 @@ canonical numerical contracts used by the linalg/ml UDFs:
 ## Status
 
 The current implementation is no longer scaffold-only. `ndatafusion` now registers a substantial
-direct batch-native catalog across 75 scalar UDFs:
+direct batch-native catalog across 78 scalar UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
@@ -96,7 +96,9 @@ direct batch-native catalog across 75 scalar UDFs:
 6. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
 7. fixed-shape tensor last-axis reductions, normalization, batched products, row-wise
    permutation/contraction, and variable-shape tensor last-axis workflows
-8. matrix column means, PCA, dense iterative solvers, and linear regression
+8. matrix column means, PCA fit plus PCA transform/inverse-transform, dense iterative solvers,
+   and linear regression
+9. sparse direct solve via `sparse_lu_solve`
 
 The current admitted real-valued surface supports `Float32` and `Float64` across the implemented
 catalog. The crate also has end-to-end SQL integration coverage for:
@@ -112,6 +114,9 @@ catalog. The crate also has end-to-end SQL integration coverage for:
 9. fixed-shape tensor constructor plus reduction pipelines
 10. fixed-shape tensor axis permutation / contraction queries
 
-The next milestone is residual admitted parity on top of the current constructor-backed
-real-valued catalog. Actual crates.io publication remains blocked until `ndatafusion` can depend
-on a published Arrow-58-compatible DataFusion release instead of the current git revision.
+The current non-controversial, SQL-natural, real-valued catalog is now implemented for the
+constructor-backed surface. Remaining implementation work has moved to the controversial or
+post-v1 bucket, such as complex-valued result contracts, callback-driven differentiation, richer
+planner/UDAF/table-function surfaces, and stateful factorization reuse. Actual crates.io
+publication remains blocked until `ndatafusion` can depend on a published Arrow-58-compatible
+DataFusion release instead of the current git revision.

@@ -57,10 +57,10 @@
 //! - dense vector row operations
 //! - dense matrix products, triangular solves, configurable and zero-config matrix functions,
 //!   decompositions, and summary statistics
-//! - sparse CSR batch products and transpose
+//! - sparse CSR batch products, direct solve, and transpose
 //! - fixed-shape tensor last-axis operations plus row-wise permutation / contraction, and
 //!   variable-shape tensor last-axis operations
-//! - dense iterative solvers plus linear regression and PCA-style ML/stat helpers
+//! - dense iterative solvers plus linear regression and PCA fit / transform / inverse-transform
 //!
 //! For project state, scope, and release posture, see the repository docs under `docs/`.
 

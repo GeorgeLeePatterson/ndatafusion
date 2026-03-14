@@ -27,10 +27,12 @@ pub use crate::udf::matrix_functions::{
 };
 pub use crate::udf::ml::{
     linear_regression_udf, matrix_center_columns_udf, matrix_column_means_udf,
-    matrix_correlation_udf, matrix_covariance_udf, matrix_pca_udf,
+    matrix_correlation_udf, matrix_covariance_udf, matrix_pca_inverse_transform_udf,
+    matrix_pca_transform_udf, matrix_pca_udf,
 };
 pub use crate::udf::sparse::{
-    sparse_matmat_dense_udf, sparse_matmat_sparse_udf, sparse_matvec_udf, sparse_transpose_udf,
+    sparse_lu_solve_udf, sparse_matmat_dense_udf, sparse_matmat_sparse_udf, sparse_matvec_udf,
+    sparse_transpose_udf,
 };
 pub use crate::udf::tensor::{
     tensor_batched_dot_last_axis_udf, tensor_batched_matmul_last_two_udf, tensor_contract_axes_udf,
@@ -107,6 +109,7 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_power_udf(),
         matrix_sign_udf(),
         sparse_matvec_udf(),
+        sparse_lu_solve_udf(),
         sparse_matmat_dense_udf(),
         sparse_transpose_udf(),
         sparse_matmat_sparse_udf(),
@@ -126,6 +129,8 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_covariance_udf(),
         matrix_correlation_udf(),
         matrix_pca_udf(),
+        matrix_pca_transform_udf(),
+        matrix_pca_inverse_transform_udf(),
         linear_regression_udf(),
     ]
 }
@@ -136,6 +141,6 @@ mod tests {
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
-        assert_eq!(all_default_functions().len(), 75);
+        assert_eq!(all_default_functions().len(), 78);
     }
 }

@@ -243,6 +243,11 @@ pub fn sparse_matvec(matrices: Expr, vectors: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn sparse_lu_solve(matrices: Expr, rhs: Expr) -> Expr {
+    udfs::sparse_lu_solve_udf().call(vec![matrices, rhs])
+}
+
+#[must_use]
 pub fn sparse_matmat_dense(matrices: Expr, dense: Expr) -> Expr {
     udfs::sparse_matmat_dense_udf().call(vec![matrices, dense])
 }
@@ -341,6 +346,16 @@ pub fn matrix_correlation(matrix: Expr) -> Expr {
 pub fn matrix_pca(matrix: Expr) -> Expr { udfs::matrix_pca_udf().call(vec![matrix]) }
 
 #[must_use]
+pub fn matrix_pca_transform(matrix: Expr, pca: Expr) -> Expr {
+    udfs::matrix_pca_transform_udf().call(vec![matrix, pca])
+}
+
+#[must_use]
+pub fn matrix_pca_inverse_transform(scores: Expr, pca: Expr) -> Expr {
+    udfs::matrix_pca_inverse_transform_udf().call(vec![scores, pca])
+}
+
+#[must_use]
 pub fn matrix_conjugate_gradient(
     matrix: Expr,
     rhs: Expr,
@@ -373,19 +388,19 @@ mod tests {
         matrix_eigen_generalized, matrix_eigen_symmetric, matrix_exp, matrix_exp_eigen,
         matrix_gmres, matrix_gram_schmidt, matrix_gram_schmidt_classic, matrix_inverse,
         matrix_log_determinant, matrix_log_eigen, matrix_log_svd, matrix_log_taylor, matrix_lu,
-        matrix_lu_solve, matrix_matmul, matrix_matvec, matrix_pca, matrix_polar, matrix_power,
-        matrix_qr, matrix_qr_condition_number, matrix_qr_pivoted, matrix_qr_reconstruct,
-        matrix_qr_reduced, matrix_qr_solve_least_squares, matrix_schur, matrix_sign,
-        matrix_solve_lower, matrix_solve_lower_matrix, matrix_solve_upper,
-        matrix_solve_upper_matrix, matrix_svd, matrix_svd_condition_number, matrix_svd_null_space,
-        matrix_svd_pseudo_inverse, matrix_svd_rank, matrix_svd_reconstruct, matrix_svd_truncated,
-        matrix_svd_with_tolerance, sparse_matmat_dense, sparse_matmat_sparse, sparse_matvec,
-        sparse_transpose, tensor_batched_dot_last_axis, tensor_batched_matmul_last_two,
-        tensor_contract_axes, tensor_l2_norm_last_axis, tensor_normalize_last_axis,
-        tensor_permute_axes, tensor_sum_last_axis, tensor_variable_batched_dot_last_axis,
-        tensor_variable_l2_norm_last_axis, tensor_variable_normalize_last_axis,
-        tensor_variable_sum_last_axis, vector_cosine_distance, vector_cosine_similarity,
-        vector_dot, vector_l2_norm, vector_normalize,
+        matrix_lu_solve, matrix_matmul, matrix_matvec, matrix_pca, matrix_pca_inverse_transform,
+        matrix_pca_transform, matrix_polar, matrix_power, matrix_qr, matrix_qr_condition_number,
+        matrix_qr_pivoted, matrix_qr_reconstruct, matrix_qr_reduced, matrix_qr_solve_least_squares,
+        matrix_schur, matrix_sign, matrix_solve_lower, matrix_solve_lower_matrix,
+        matrix_solve_upper, matrix_solve_upper_matrix, matrix_svd, matrix_svd_condition_number,
+        matrix_svd_null_space, matrix_svd_pseudo_inverse, matrix_svd_rank, matrix_svd_reconstruct,
+        matrix_svd_truncated, matrix_svd_with_tolerance, sparse_lu_solve, sparse_matmat_dense,
+        sparse_matmat_sparse, sparse_matvec, sparse_transpose, tensor_batched_dot_last_axis,
+        tensor_batched_matmul_last_two, tensor_contract_axes, tensor_l2_norm_last_axis,
+        tensor_normalize_last_axis, tensor_permute_axes, tensor_sum_last_axis,
+        tensor_variable_batched_dot_last_axis, tensor_variable_l2_norm_last_axis,
+        tensor_variable_normalize_last_axis, tensor_variable_sum_last_axis, vector_cosine_distance,
+        vector_cosine_similarity, vector_dot, vector_l2_norm, vector_normalize,
     };
 
     fn literal_i64(value: i64) -> Expr { Expr::Literal(ScalarValue::Int64(Some(value)), None) }
@@ -569,6 +584,7 @@ mod tests {
         let three = literal_i64(3);
 
         assert_scalar_function(sparse_matvec(one.clone(), two.clone()), "sparse_matvec", 2);
+        assert_scalar_function(sparse_lu_solve(one.clone(), two.clone()), "sparse_lu_solve", 2);
         assert_scalar_function(
             sparse_matmat_dense(one.clone(), two.clone()),
             "sparse_matmat_dense",
@@ -645,6 +661,16 @@ mod tests {
         assert_scalar_function(matrix_covariance(one.clone()), "matrix_covariance", 1);
         assert_scalar_function(matrix_correlation(one.clone()), "matrix_correlation", 1);
         assert_scalar_function(matrix_pca(one.clone()), "matrix_pca", 1);
+        assert_scalar_function(
+            matrix_pca_transform(one.clone(), two.clone()),
+            "matrix_pca_transform",
+            2,
+        );
+        assert_scalar_function(
+            matrix_pca_inverse_transform(one.clone(), two.clone()),
+            "matrix_pca_inverse_transform",
+            2,
+        );
         assert_scalar_function(
             matrix_conjugate_gradient(one.clone(), two.clone(), three.clone(), four.clone()),
             "matrix_conjugate_gradient",

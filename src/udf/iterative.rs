@@ -347,3 +347,98 @@ pub fn matrix_conjugate_gradient_udf() -> Arc<ScalarUDF> {
 pub fn matrix_gmres_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixGmres::new()))
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::common::ScalarValue;
+    use datafusion::logical_expr::ReturnFieldArgs;
+
+    use super::*;
+    use crate::metadata::{fixed_shape_tensor_field, vector_field};
+
+    #[test]
+    fn iterative_helpers_validate_square_system_contracts_and_configs() {
+        let matrix =
+            fixed_shape_tensor_field("matrix", &DataType::Float64, &[2, 2], false).expect("matrix");
+        let rhs = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs");
+        let scalar_arguments = [None, None];
+        let args = ReturnFieldArgs {
+            arg_fields:       &[Arc::clone(&matrix), Arc::clone(&rhs)],
+            scalar_arguments: &scalar_arguments,
+        };
+        let (value_type, len) =
+            return_square_system(&args, "matrix_conjugate_gradient").expect("square contract");
+        assert_eq!(value_type, DataType::Float64);
+        assert_eq!(len, 2);
+
+        let wrong_type = vector_field("rhs", &DataType::Float32, 2, false).expect("rhs");
+        let wrong_type_args = ReturnFieldArgs {
+            arg_fields:       &[Arc::clone(&matrix), wrong_type],
+            scalar_arguments: &scalar_arguments,
+        };
+        let error = return_square_system(&wrong_type_args, "matrix_conjugate_gradient")
+            .expect_err("value type mismatch should fail");
+        assert!(error.to_string().contains("value type mismatch"), "unexpected error: {error}");
+
+        let non_square =
+            fixed_shape_tensor_field("matrix", &DataType::Float64, &[2, 3], false).expect("matrix");
+        let non_square_args = ReturnFieldArgs {
+            arg_fields:       &[Arc::clone(&non_square), Arc::clone(&rhs)],
+            scalar_arguments: &scalar_arguments,
+        };
+        let error = return_square_system(&non_square_args, "matrix_conjugate_gradient")
+            .expect_err("non-square matrix should fail");
+        assert!(
+            error.to_string().contains("requires square matrices"),
+            "unexpected error: {error}"
+        );
+
+        let short_rhs = vector_field("rhs", &DataType::Float64, 1, false).expect("rhs");
+        let short_rhs_args = ReturnFieldArgs {
+            arg_fields:       &[matrix, short_rhs],
+            scalar_arguments: &scalar_arguments,
+        };
+        let error = return_square_system(&short_rhs_args, "matrix_conjugate_gradient")
+            .expect_err("rhs length mismatch should fail");
+        assert!(
+            error.to_string().contains("rhs vector length mismatch"),
+            "unexpected error: {error}"
+        );
+
+        let config32 =
+            iterative_config_f32("matrix_conjugate_gradient", 1.0e-3, 8).expect("f32 config");
+        assert_eq!(config32.max_iterations, 8);
+        assert!((config32.tolerance - 1.0e-3_f32).abs() < f32::EPSILON);
+
+        let config64 =
+            iterative_config_f64("matrix_conjugate_gradient", 1.0e-6, 16).expect("f64 config");
+        assert_eq!(config64.max_iterations, 16);
+        assert!((config64.tolerance - 1.0e-6).abs() < f64::EPSILON);
+
+        let error = iterative_config_f64("matrix_conjugate_gradient", 0.0, 16)
+            .expect_err("non-positive tolerance should fail");
+        assert!(
+            error.to_string().contains("tolerance must be positive"),
+            "unexpected error: {error}"
+        );
+
+        let error = iterative_config_f64("matrix_conjugate_gradient", f64::INFINITY, 16)
+            .expect_err("non-finite tolerance should fail");
+        assert!(
+            error.to_string().contains("tolerance must be finite"),
+            "unexpected error: {error}"
+        );
+
+        let error = iterative_config_f64("matrix_conjugate_gradient", 1.0e-6, 0)
+            .expect_err("zero iterations should fail");
+        assert!(
+            error.to_string().contains("max_iterations must be greater than 0"),
+            "unexpected error: {error}"
+        );
+
+        let scalar = ScalarValue::Float64(Some(1.0e-4));
+        let scalar_arguments = [None, None, Some(&scalar), None];
+        assert_eq!(scalar_arguments[2], Some(&ScalarValue::Float64(Some(1.0e-4))));
+    }
+}

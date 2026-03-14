@@ -601,6 +601,84 @@ async fn sql_spectral_and_orthogonalization_queries_execute() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sql_pca_application_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let batch = RecordBatch::try_from_iter(vec![(
+        "matrix_values",
+        Arc::new(nested_float64_list_column(vec![vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![
+            5.0, 6.0,
+        ]]])?) as ArrayRef,
+    )])?;
+    drop(ctx.register_batch("pca_helpers", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                pca.scores AS scores,
+                matrix_pca_transform(matrix, pca) AS projected,
+                matrix_pca_inverse_transform(pca.scores, pca) AS reconstructed
+             FROM (
+                SELECT
+                    make_matrix(matrix_values, 3, 2) AS matrix,
+                    matrix_pca(make_matrix(matrix_values, 3, 2)) AS pca
+                FROM pca_helpers
+             )",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+
+    let schema = batches[0].schema();
+    let scores_field = schema.field(0);
+    let scores =
+        batches[0].column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("PCA scores");
+    let scores = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(scores_field, scores)
+        .expect("scores")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 scores");
+
+    let projected_field = schema.field(1);
+    let projected = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("projected scores");
+    let projected =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(projected_field, projected)
+            .expect("projected scores")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 projected scores");
+    assert_close(projected[[0, 0, 0]], scores[[0, 0, 0]]);
+    assert_close(projected[[0, 2, 0]], scores[[0, 2, 0]]);
+    assert_close(projected[[0, 1, 1]], scores[[0, 1, 1]]);
+
+    let reconstructed_field = schema.field(2);
+    let reconstructed = batches[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("reconstructed matrix");
+    let reconstructed = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(
+        reconstructed_field,
+        reconstructed,
+    )
+    .expect("reconstructed matrix")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 reconstructed matrix");
+    assert_close(reconstructed[[0, 0, 0]], 1.0);
+    assert_close(reconstructed[[0, 0, 1]], 2.0);
+    assert_close(reconstructed[[0, 2, 0]], 5.0);
+    assert_close(reconstructed[[0, 2, 1]], 6.0);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn sql_triangular_and_matrix_function_queries_execute() -> Result<()> {
     let mut ctx = SessionContext::new();
     ndatafusion::register_all(&mut ctx)?;
@@ -859,6 +937,67 @@ async fn sql_sparse_and_variable_tensor_pipeline_executes() -> Result<()> {
     assert_close(first_vector[[1]], 6.0);
     assert_close(second_vector[[0]], 8.0);
     assert_close(second_vector[[1]], 16.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_sparse_lu_solve_executes() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef),
+        ("shape", Arc::new(int32_list_array(vec![vec![2, 2], vec![2, 2]])) as ArrayRef),
+        ("row_ptrs", Arc::new(int32_list_array(vec![vec![0, 2, 4], vec![0, 1, 2]])) as ArrayRef),
+        ("col_indices", Arc::new(u32_list_array(vec![vec![0, 1, 0, 1], vec![0, 1]])) as ArrayRef),
+        (
+            "values",
+            Arc::new(float64_list_array(vec![vec![4.0, 1.0, 1.0, 3.0], vec![2.0, 5.0]]))
+                as ArrayRef,
+        ),
+        (
+            "rhs_data",
+            Arc::new(float64_list_array(vec![vec![1.0, 2.0], vec![4.0, 10.0]])) as ArrayRef,
+        ),
+        ("rhs_shape", Arc::new(int32_list_array(vec![vec![2], vec![2]])) as ArrayRef),
+    ])?;
+    drop(ctx.register_batch("sparse_solve_inputs", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                sparse_lu_solve(
+                    make_csr_matrix_batch(shape, row_ptrs, col_indices, values),
+                    make_variable_tensor(rhs_data, rhs_shape, 1)
+                ) AS solved
+             FROM sparse_solve_inputs
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+
+    let schema = batches[0].schema();
+    let solved_field = schema.field(1);
+    let mut solved_rows = ndarrow::variable_shape_tensor_iter::<Float64Type>(
+        solved_field,
+        struct_column(&batches[0], 1),
+    )
+    .expect("sparse solve output");
+    let (_, first) = solved_rows.next().expect("row 0").expect("row 0 tensor");
+    let first = first.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    let (_, second) = solved_rows.next().expect("row 1").expect("row 1 tensor");
+    let second = second.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    assert_close(first[[0]], 1.0 / 11.0);
+    assert_close(first[[1]], 7.0 / 11.0);
+    assert_close(second[[0]], 2.0);
+    assert_close(second[[1]], 2.0);
+
     Ok(())
 }
 

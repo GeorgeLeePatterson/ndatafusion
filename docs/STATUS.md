@@ -60,6 +60,13 @@ top of the released upstream contracts.
     (`matrix_balance_nonsymmetric`) with a struct result contract for the balanced matrix plus
     balancing diagonal, direct unit coverage, float32 type-propagation coverage, square-contract
     validation, and constructor-backed SQL integration coverage.
+24. The PCA application slice now also covers direct transform and inverse-transform helpers
+    (`matrix_pca_transform` and `matrix_pca_inverse_transform`) against the existing PCA struct
+    contract, with direct unit coverage, float32 type-propagation coverage, and constructor-backed
+    SQL integration coverage.
+25. The sparse direct-solve slice now also covers `sparse_lu_solve` over canonical
+    `ndarrow.csr_matrix_batch` plus rank-1 variable-shape tensor batches, with direct unit
+    coverage, float32 type-propagation coverage, and constructor-backed SQL integration coverage.
 
 ## Current Repository Reality
 
@@ -117,17 +124,22 @@ Target ownership after the first real implementation rounds:
 
 Local implementation round:
 
-1. Finish the residual admitted real-valued catalog that still fits the direct batch-delegation
-   model.
-2. Preserve the current publish-hardening posture while the catalog grows.
+1. Hold the current non-controversial real-valued catalog stable for release.
+2. Move the next planning pass to controversial or post-v1 work only:
+   - complex-valued result contracts,
+   - callback-driven differentiation / optimization,
+   - stateful sparse factorization reuse,
+   - richer planner, UDAF, window, or table-function surfaces.
 3. Revisit crates.io publication only once DataFusion exposes a compatible published release line.
 
 ## V1 Publish Readiness
 
-Not ready.
+Not ready for crates.io publication.
 
-Blocked by:
+Current state:
 
-1. residual admitted parity work that still fits the current real-valued v1 contract
-2. the current DataFusion git dependency, which blocks crates.io publication until a compatible
+1. the non-controversial, SQL-natural, real-valued catalog is now implemented and release-worthy
+   for git consumption
+2. the remaining implementation work is intentionally controversial or post-v1
+3. the current DataFusion git dependency still blocks crates.io publication until a compatible
    published release exists

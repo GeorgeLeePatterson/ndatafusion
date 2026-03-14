@@ -38,9 +38,9 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 | Dense vector surface | row-wise vector kernels (`dot`, norms, cosine, pairwise/batched where natural) | Partial | unit tests | `l2_norm`, `dot`, `cosine_similarity`, `cosine_distance`, and `normalize` now exist for `rows-of-vectors` over `FixedSizeList<Float32|Float64>(D)`. |
 | Dense matrix surface | row-wise matrix kernels and helpers | Partial | unit tests + SQL e2e | Row-wise `matrix_matvec`, batched matrix-matrix product, lower/upper triangular solves, lower/upper triangular matrix solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers now exist over square fixed-shape tensor matrix batches plus fixed-size-list vector batches. |
 | Decomposition surface | struct-returning factorization and solver contracts | Partial | unit tests + SQL e2e | LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD, tolerance-thresholded SVD, SVD null-space, symmetric/generalized eigen, non-symmetric balancing, Schur, and polar helpers now exist, along with direct QR condition-number / reconstruction, SVD pseudo-inverse / rank / condition-number / reconstruction, and Gram-Schmidt helpers; residual complex, nonsymmetric spectral, and other config-heavy workflows still remain. |
-| Sparse surface | CSR-aware DataFusion contracts and wrappers | Partial | unit tests | Sparse batch matvec, dense matmat, transpose, and sparse matmat now exist over `ndarrow.csr_matrix_batch`. |
+| Sparse surface | CSR-aware DataFusion contracts and wrappers | Partial | unit tests | Sparse batch matvec, direct solve, dense matmat, transpose, and sparse matmat now exist over `ndarrow.csr_matrix_batch`. |
 | Tensor surface | fixed-shape tensor contracts and wrappers | Partial | unit tests + SQL e2e | Fixed-shape last-axis reductions, normalization, batched products, and row-wise axis permutation / contraction now exist alongside the admitted variable-shape last-axis workflows on the real-valued surface. |
-| ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests + SQL e2e | Column means, centering, covariance, correlation, PCA, dense iterative solvers, and linear regression now exist; callback/config-heavy workflows still remain. |
+| ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests + SQL e2e | Column means, centering, covariance, correlation, PCA fit / transform / inverse-transform, dense iterative solvers, and linear regression now exist; callback/config-heavy workflows still remain. |
 | SQL usability | constructors and normalizers from SQL-friendly nested values into canonical contracts | Implemented | unit tests | `make_vector`, `make_matrix`, `make_tensor`, `make_variable_tensor`, and `make_csr_matrix_batch` now cover the admitted real-valued canonical contracts from SQL-style `List` values plus scalar dimensions. |
 | Planner layer | function rewrites or expression planners | Missing | No | Optional for v1 unless required by constructors or ergonomics. |
 | Hardening | examples, integration coverage, docs, and publish checklist readiness | Implemented | `just checks` + `cargo doc --no-default-features --no-deps` | Contract-edge unit coverage, README quick-start examples, crate-level docs, docs.rs metadata, and an explicit publish checklist now exist for the current constructor-backed catalog. |
@@ -64,10 +64,10 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 
 | Capability Group | Current Status | Gap |
 |---|---|---|
-| Dense vector and matrix kernels | Partial | Core row-preserving real-valued slices are in place, including row-wise matvec, triangular solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers; residual complex and less SQL-natural helpers remain. |
-| Decomposition and solver workflows | Partial | LU, Cholesky, QR, reduced QR, pivoted QR, SVD, symmetric/generalized eigen, non-symmetric balancing, Schur, and polar contracts now exist, including QR least-squares / condition-number / reconstruction plus SVD truncated/tolerance/null-space/pseudo-inverse/rank/condition-number/reconstruction helpers and direct Gram-Schmidt variants; residual complex, nonsymmetric spectral, and other config-heavy variants remain. |
-| Sparse and tensor workflows | Partial | Core sparse batch workflows plus fixed-shape tensor last-axis / axis-structure workflows and variable-shape tensor last-axis workflows now exist on the admitted real-valued surface. |
-| ML/stat workflows | Partial | Stats, PCA, dense iterative solvers, and linear regression now exist on the admitted real-valued surface; callback-driven workflows remain open. |
+| Dense vector and matrix kernels | Partial | The non-controversial SQL-natural real-valued slice is now complete, including row-wise matvec, triangular solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers; residual work is now complex-valued or otherwise post-v1. |
+| Decomposition and solver workflows | Partial | The non-controversial real-valued slice is now complete across LU, Cholesky, QR, reduced QR, pivoted QR, SVD, symmetric/generalized eigen, non-symmetric balancing, Schur, polar, QR least-squares / condition-number / reconstruction, SVD truncated/tolerance/null-space/pseudo-inverse/rank/condition-number/reconstruction, and direct Gram-Schmidt variants; residual work is now complex-valued, nonsymmetric-complex, or otherwise post-v1. |
+| Sparse and tensor workflows | Partial | The non-controversial real-valued slice is now complete across sparse matvec / direct solve / dense matmat / transpose / sparse matmat plus fixed-shape tensor last-axis / axis-structure workflows and variable-shape tensor last-axis workflows; residual work is now richer stateful sparse reuse or other post-v1 expansions. |
+| ML/stat workflows | Partial | The non-controversial real-valued slice is now complete across stats, PCA fit / transform / inverse-transform, dense iterative solvers, and linear regression; callback-driven workflows remain explicitly post-v1. |
 | Constructor and normalization surface | Implemented | The admitted real-valued constructor set now exists via the `make_*` UDF family over SQL `List` values and explicit shape scalars. |
 | Quality and publish hardening | Implemented | Feature-matrix checks, line coverage > 90%, crate docs, docs.rs metadata, README examples, and the publish checklist now exist. |
 
@@ -82,17 +82,19 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 
 ## Sufficiency Verdict
 
-`ndatafusion` is not yet sufficient for a v1 publish.
+`ndatafusion` is sufficient for a git-consumed v1 release of the current non-controversial,
+SQL-natural, real-valued surface, but it is not yet sufficient for a crates.io v1 publish.
 
-What exists now is the governance baseline, released upstream dependency alignment, a substantial
-constructor-backed real-valued catalog, and publish-hardening docs for the current local release
-posture.
+What exists now is the governance baseline, released upstream dependency alignment, a complete
+non-controversial constructor-backed real-valued catalog, and publish-hardening docs for the
+current git-consumed release posture.
 
 Primary remaining work:
 
-1. Finish the residual admitted catalog while preferring direct batch delegation over bespoke lifting.
-2. Replace the temporary DataFusion git dependency with a published compatible release once the
+1. Replace the temporary DataFusion git dependency with a published compatible release once the
    upstream crates.io line satisfies the Arrow 58 contract.
+2. Decide which controversial or post-v1 capabilities are actually worth admitting after the
+   current release checkpoint.
 
 ## Execution Order Driven By This Matrix
 
@@ -100,4 +102,4 @@ Primary remaining work:
 2. Dense vector/matrix registration slice.
 3. Decomposition result contracts and solver helpers.
 4. Sparse, tensor, and ML/stat expansion.
-5. Residual admitted parity and any narrowly justified fallback-only support.
+5. Post-v1 planning for controversial surfaces and any narrowly justified fallback-only support.

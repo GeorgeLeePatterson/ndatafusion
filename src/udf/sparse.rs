@@ -1,12 +1,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use datafusion::arrow::array::Array;
 use datafusion::arrow::array::types::{Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
 };
+use ndarray::Ix1;
 
 use super::common::{expect_struct_arg, map_arrow_error, nullable_or};
 use crate::error::{exec_error, plan_error};
@@ -182,6 +184,93 @@ impl ScalarUDFImpl for SparseMatmatDense {
     }
 }
 
+fn return_sparse_vector_output_field(
+    args: &ReturnFieldArgs<'_>,
+    function_name: &str,
+) -> Result<FieldRef> {
+    let matrix_type = parse_csr_matrix_batch_field(&args.arg_fields[0], function_name, 1)?;
+    let vector_contract = parse_variable_shape_tensor_field(&args.arg_fields[1], function_name, 2)?;
+    if matrix_type != vector_contract.value_type {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "value type mismatch: matrix {}, vector {}",
+                matrix_type, vector_contract.value_type
+            ),
+        ));
+    }
+    if vector_contract.dimensions != 1 {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "argument 2 must be a batch of rank-1 dense vectors, found rank {}",
+                vector_contract.dimensions
+            ),
+        ));
+    }
+    variable_shape_tensor_field(
+        function_name,
+        &vector_contract.value_type,
+        1,
+        Some(&[None]),
+        nullable_or(args.arg_fields),
+    )
+}
+
+fn invoke_sparse_lu_solve_typed<T>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+) -> Result<ColumnarValue>
+where
+    T: datafusion::arrow::array::types::ArrowPrimitiveType,
+    T::Native: nabled::core::prelude::NabledReal + ndarrow::NdarrowElement,
+{
+    let matrices = expect_struct_arg(args, 1, function_name)?;
+    let vectors = expect_struct_arg(args, 2, function_name)?;
+    if matrices.len() != vectors.len() {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "batch length mismatch: {} sparse matrices vs {} dense vectors",
+                matrices.len(),
+                vectors.len()
+            ),
+        ));
+    }
+
+    let mut outputs = Vec::with_capacity(matrices.len());
+    let mut vector_iter =
+        ndarrow::variable_shape_tensor_iter::<T>(args.arg_fields[1].as_ref(), vectors)
+            .map_err(|error| exec_error(function_name, error))?;
+    for matrix_row in ndarrow::csr_matrix_batch_iter::<T>(args.arg_fields[0].as_ref(), matrices)
+        .map_err(|error| exec_error(function_name, error))?
+    {
+        let (_, matrix_view) = matrix_row.map_err(|error| exec_error(function_name, error))?;
+        let (_, vector_view) = vector_iter
+            .next()
+            .ok_or_else(|| exec_error(function_name, "dense vector batch iterator ended early"))?
+            .map_err(|error| exec_error(function_name, error))?;
+        let vector_view = vector_view
+            .into_dimensionality::<Ix1>()
+            .map_err(|error| exec_error(function_name, error))?;
+        let matrix_view = nabled::linalg::sparse::CsrMatrixView::new(
+            matrix_view.nrows,
+            matrix_view.ncols,
+            matrix_view.row_ptrs,
+            matrix_view.col_indices,
+            matrix_view.values,
+        )
+        .map_err(|error| exec_error(function_name, error))?;
+        let solved = nabled::linalg::sparse::sparse_lu_solve_view(&matrix_view, &vector_view)
+            .map_err(|error| exec_error(function_name, error))?;
+        outputs.push(solved.into_dyn());
+    }
+    let (_field, output) =
+        ndarrow::arrays_to_variable_shape_tensor(function_name, outputs, Some(vec![None]))
+            .map_err(|error| exec_error(function_name, error))?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct SparseTranspose {
     signature: Signature,
@@ -302,6 +391,63 @@ impl ScalarUDFImpl for SparseMatmatSparse {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SparseLuSolve {
+    signature: Signature,
+}
+
+impl SparseLuSolve {
+    fn new() -> Self { Self { signature: any_signature(2) } }
+}
+
+impl ScalarUDFImpl for SparseLuSolve {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "sparse_lu_solve" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        return_sparse_vector_output_field(&args, self.name())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let value_type = parse_csr_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let vector_contract =
+            parse_variable_shape_tensor_field(&args.arg_fields[1], self.name(), 2)?;
+        if value_type != vector_contract.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "value type mismatch: matrix {}, vector {}",
+                    value_type, vector_contract.value_type
+                ),
+            ));
+        }
+        if vector_contract.dimensions != 1 {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "argument 2 must be a batch of rank-1 dense vectors, found rank {}",
+                    vector_contract.dimensions
+                ),
+            ));
+        }
+        match value_type {
+            DataType::Float32 => invoke_sparse_lu_solve_typed::<Float32Type>(&args, self.name()),
+            DataType::Float64 => invoke_sparse_lu_solve_typed::<Float64Type>(&args, self.name()),
+            actual => Err(exec_error(
+                self.name(),
+                format!("unsupported sparse matrix value type {actual}"),
+            )),
+        }
+    }
+}
+
 #[must_use]
 pub fn sparse_matvec_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(SparseMatvec::new()))
@@ -320,4 +466,67 @@ pub fn sparse_transpose_udf() -> Arc<ScalarUDF> {
 #[must_use]
 pub fn sparse_matmat_sparse_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(SparseMatmatSparse::new()))
+}
+
+#[must_use]
+pub fn sparse_lu_solve_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(SparseLuSolve::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion::logical_expr::ReturnFieldArgs;
+
+    use super::*;
+    use crate::metadata::{parse_variable_shape_tensor_field, variable_shape_tensor_field};
+
+    #[test]
+    fn sparse_vector_output_field_validates_value_type_and_rank() {
+        let (sparse_field, _) = ndarrow::csr_batch_to_extension_array(
+            "sparse",
+            vec![[2, 2]],
+            vec![vec![0, 1, 2]],
+            vec![vec![0, 1]],
+            vec![vec![1.0, 2.0]],
+        )
+        .expect("sparse batch");
+        let sparse_field = Arc::new(sparse_field);
+        let vectors =
+            variable_shape_tensor_field("rhs", &DataType::Float64, 1, Some(&[None]), false)
+                .expect("vector batch field");
+        let scalar_arguments = [None, None];
+        let args = ReturnFieldArgs {
+            arg_fields:       &[Arc::clone(&sparse_field), Arc::clone(&vectors)],
+            scalar_arguments: &scalar_arguments,
+        };
+        let output =
+            return_sparse_vector_output_field(&args, "sparse_lu_solve").expect("return field");
+        let contract =
+            parse_variable_shape_tensor_field(&output, "sparse_lu_solve", 1).expect("contract");
+        assert_eq!(contract.value_type, DataType::Float64);
+        assert_eq!(contract.dimensions, 1);
+
+        let rank_two =
+            variable_shape_tensor_field("rhs", &DataType::Float64, 2, Some(&[None, None]), false)
+                .expect("matrix batch field");
+        let rank_two_args = ReturnFieldArgs {
+            arg_fields:       &[Arc::clone(&sparse_field), rank_two],
+            scalar_arguments: &scalar_arguments,
+        };
+        let error = return_sparse_vector_output_field(&rank_two_args, "sparse_lu_solve")
+            .expect_err("rank mismatch should fail");
+        assert!(error.to_string().contains("rank-1 dense vectors"), "unexpected error: {error}");
+
+        let float32_vectors =
+            variable_shape_tensor_field("rhs", &DataType::Float32, 1, Some(&[None]), false)
+                .expect("vector batch field");
+        let mismatch_args = ReturnFieldArgs {
+            arg_fields:       &[sparse_field, float32_vectors],
+            scalar_arguments: &scalar_arguments,
+        };
+        let error = return_sparse_vector_output_field(&mismatch_args, "sparse_lu_solve")
+            .expect_err("value type mismatch should fail");
+        assert!(error.to_string().contains("value type mismatch"), "unexpected error: {error}");
+    }
 }
