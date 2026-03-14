@@ -64,7 +64,7 @@ jobs:
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
       - name: Run repository checks
         run: just checks
@@ -100,8 +100,9 @@ jobs:
       - name: Generate code coverage
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --lcov --no-report --ignore-filename-regex "(examples).*" -F test-utils
-          cargo llvm-cov report --fail-under-lines 90 --lcov --output-path lcov.info
+          cargo llvm-cov --no-default-features --features test-utils --no-report
+          cargo llvm-cov report --summary-only --ignore-filename-regex "(examples).*" --fail-under-lines 90
+          cargo llvm-cov report --lcov --ignore-filename-regex "(examples).*" --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
