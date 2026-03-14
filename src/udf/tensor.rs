@@ -6,9 +6,16 @@ use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
+use nabled::core::prelude::NabledReal;
+use ndarray::{Axis, IxDyn};
+use ndarrow::NdarrowElement;
 
-use super::common::{expect_fixed_size_list_arg, expect_struct_arg, map_arrow_error};
+use super::common::{
+    expect_fixed_size_list_arg, expect_struct_arg, expect_usize_scalar_arg,
+    expect_usize_scalar_argument, fixed_shape_tensor_viewd, map_arrow_error, nullable_or,
+};
 use crate::error::{exec_error, plan_error};
 use crate::metadata::{
     fixed_shape_tensor_field, parse_tensor_batch_field, parse_variable_shape_tensor_field,
@@ -63,6 +70,269 @@ fn validate_variable_pair_ranks(
         ));
     }
     Ok(())
+}
+
+fn permutation_shape(
+    function_name: &str,
+    shape: &[usize],
+    permutation: &[usize],
+) -> Result<Vec<usize>> {
+    if permutation.len() != shape.len() {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "{function_name} requires permutation length {} to match tensor rank {}, found {}",
+                shape.len(),
+                shape.len(),
+                permutation.len()
+            ),
+        ));
+    }
+    let mut seen = vec![false; shape.len()];
+    let mut output = Vec::with_capacity(shape.len());
+    for &axis in permutation {
+        if axis >= shape.len() {
+            return Err(plan_error(
+                function_name,
+                format!(
+                    "{function_name} axis {axis} is out of bounds for tensor rank {}",
+                    shape.len()
+                ),
+            ));
+        }
+        if std::mem::replace(&mut seen[axis], true) {
+            return Err(plan_error(
+                function_name,
+                format!("{function_name} permutation contains duplicate axis {axis}"),
+            ));
+        }
+        output.push(shape[axis]);
+    }
+    Ok(output)
+}
+
+fn axis_mask(function_name: &str, label: &str, rank: usize, axes: &[usize]) -> Result<Vec<bool>> {
+    let mut mask = vec![false; rank];
+    for &axis in axes {
+        if axis >= rank {
+            return Err(plan_error(
+                function_name,
+                format!(
+                    "{function_name} {label} axis {axis} is out of bounds for tensor rank {rank}"
+                ),
+            ));
+        }
+        if std::mem::replace(&mut mask[axis], true) {
+            return Err(plan_error(
+                function_name,
+                format!("{function_name} {label} axes contain duplicate axis {axis}"),
+            ));
+        }
+    }
+    Ok(mask)
+}
+
+fn contracted_shape(
+    function_name: &str,
+    left_shape: &[usize],
+    right_shape: &[usize],
+    left_axes: &[usize],
+    right_axes: &[usize],
+) -> Result<Vec<usize>> {
+    if left_axes.len() != right_axes.len() {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "{function_name} requires matching axis counts, found {} left axes and {} right \
+                 axes",
+                left_axes.len(),
+                right_axes.len()
+            ),
+        ));
+    }
+    let left_mask = axis_mask(function_name, "left", left_shape.len(), left_axes)?;
+    let right_mask = axis_mask(function_name, "right", right_shape.len(), right_axes)?;
+    for (&left_axis, &right_axis) in left_axes.iter().zip(right_axes.iter()) {
+        if left_shape[left_axis] != right_shape[right_axis] {
+            return Err(plan_error(
+                function_name,
+                format!(
+                    "{function_name} axis mismatch: left axis {left_axis} has size {}, right axis \
+                     {right_axis} has size {}",
+                    left_shape[left_axis], right_shape[right_axis]
+                ),
+            ));
+        }
+    }
+    let mut output = Vec::with_capacity(
+        left_shape.len() + right_shape.len() - left_axes.len() - right_axes.len(),
+    );
+    for (axis, &dim) in left_shape.iter().enumerate() {
+        if !left_mask[axis] {
+            output.push(dim);
+        }
+    }
+    for (axis, &dim) in right_shape.iter().enumerate() {
+        if !right_mask[axis] {
+            output.push(dim);
+        }
+    }
+    Ok(output)
+}
+
+fn build_fixed_shape_tensor_output<T>(
+    function_name: &str,
+    batch: usize,
+    shape: &[usize],
+    values: Vec<T::Native>,
+) -> Result<ColumnarValue>
+where
+    T: datafusion::arrow::array::types::ArrowPrimitiveType,
+    T::Native: NdarrowElement,
+{
+    let mut full_shape = Vec::with_capacity(shape.len() + 1);
+    full_shape.push(batch);
+    full_shape.extend_from_slice(shape);
+    let output = ndarray::ArrayD::from_shape_vec(IxDyn(&full_shape), values)
+        .map_err(|error| exec_error(function_name, error))?;
+    let (_field, output) = ndarrow::arrayd_to_fixed_shape_tensor(function_name, output)
+        .map_err(|error| exec_error(function_name, error))?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+fn invoke_tensor_permute_axes_typed<T>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    tensor: &datafusion::arrow::array::FixedSizeListArray,
+    permutation: &[usize],
+    output_shape: &[usize],
+) -> Result<ColumnarValue>
+where
+    T: datafusion::arrow::array::types::ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement,
+{
+    let tensor_view = fixed_shape_tensor_viewd::<T>(&args.arg_fields[0], tensor, function_name)?;
+    let batch = tensor_view.len_of(Axis(0));
+    let mut values = Vec::with_capacity(batch * output_shape.iter().product::<usize>());
+    for row in 0..batch {
+        let tensor_row = tensor_view.index_axis(Axis(0), row).into_dyn();
+        let output = nabled::linalg::tensor::permute_axes_view(&tensor_row, permutation)
+            .map_err(|error| exec_error(function_name, error))?;
+        values.extend(output.iter().copied());
+    }
+    build_fixed_shape_tensor_output::<T>(function_name, batch, output_shape, values)
+}
+
+fn invoke_tensor_contract_axes_typed<T>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    left: &datafusion::arrow::array::FixedSizeListArray,
+    right: &datafusion::arrow::array::FixedSizeListArray,
+    left_axes: &[usize],
+    right_axes: &[usize],
+    output_shape: &[usize],
+) -> Result<ColumnarValue>
+where
+    T: datafusion::arrow::array::types::ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + Default,
+{
+    let left_view = fixed_shape_tensor_viewd::<T>(&args.arg_fields[0], left, function_name)?;
+    let right_view = fixed_shape_tensor_viewd::<T>(&args.arg_fields[1], right, function_name)?;
+    if left_view.len_of(Axis(0)) != right_view.len_of(Axis(0)) {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "batch length mismatch: {} left tensors vs {} right tensors",
+                left_view.len_of(Axis(0)),
+                right_view.len_of(Axis(0))
+            ),
+        ));
+    }
+
+    let batch = left_view.len_of(Axis(0));
+    let mut values = Vec::with_capacity(batch * output_shape.iter().product::<usize>());
+    for row in 0..batch {
+        let left_row = left_view.index_axis(Axis(0), row).into_dyn();
+        let right_row = right_view.index_axis(Axis(0), row).into_dyn();
+        let output = nabled::linalg::tensor::contract_axes_view(
+            &left_row, &right_row, left_axes, right_axes,
+        )
+        .map_err(|error| exec_error(function_name, error))?;
+        values.extend(output.iter().copied());
+    }
+    build_fixed_shape_tensor_output::<T>(function_name, batch, output_shape, values)
+}
+
+fn permutation_from_return_args(
+    args: &ReturnFieldArgs<'_>,
+    function_name: &str,
+) -> Result<Vec<usize>> {
+    let axis_count = args.arg_fields.len().saturating_sub(1);
+    let mut axes = Vec::with_capacity(axis_count);
+    for position in 2..=(axis_count + 1) {
+        axes.push(expect_usize_scalar_argument(args, position, function_name)?);
+    }
+    Ok(axes)
+}
+
+fn permutation_from_scalar_args(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+) -> Result<Vec<usize>> {
+    let axis_count = args.arg_fields.len().saturating_sub(1);
+    let mut axes = Vec::with_capacity(axis_count);
+    for position in 2..=(axis_count + 1) {
+        axes.push(expect_usize_scalar_arg(args, position, function_name)?);
+    }
+    Ok(axes)
+}
+
+fn contract_axes_from_return_args(
+    args: &ReturnFieldArgs<'_>,
+    function_name: &str,
+) -> Result<(Vec<usize>, Vec<usize>)> {
+    let axis_arg_count = args.arg_fields.len().saturating_sub(2);
+    if axis_arg_count == 0 || !axis_arg_count.is_multiple_of(2) {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "{function_name} requires one or more left/right axis pairs after the tensor \
+                 arguments"
+            ),
+        ));
+    }
+    let pair_count = axis_arg_count / 2;
+    let mut left_axes = Vec::with_capacity(pair_count);
+    let mut right_axes = Vec::with_capacity(pair_count);
+    for pair in 0..pair_count {
+        left_axes.push(expect_usize_scalar_argument(args, 3 + pair * 2, function_name)?);
+        right_axes.push(expect_usize_scalar_argument(args, 4 + pair * 2, function_name)?);
+    }
+    Ok((left_axes, right_axes))
+}
+
+fn contract_axes_from_scalar_args(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+) -> Result<(Vec<usize>, Vec<usize>)> {
+    let axis_arg_count = args.arg_fields.len().saturating_sub(2);
+    if axis_arg_count == 0 || !axis_arg_count.is_multiple_of(2) {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "{function_name} requires one or more left/right axis pairs after the tensor \
+                 arguments"
+            ),
+        ));
+    }
+    let pair_count = axis_arg_count / 2;
+    let mut left_axes = Vec::with_capacity(pair_count);
+    let mut right_axes = Vec::with_capacity(pair_count);
+    for pair in 0..pair_count {
+        left_axes.push(expect_usize_scalar_arg(args, 3 + pair * 2, function_name)?);
+        right_axes.push(expect_usize_scalar_arg(args, 4 + pair * 2, function_name)?);
+    }
+    Ok((left_axes, right_axes))
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -318,6 +588,156 @@ impl ScalarUDFImpl for TensorBatchedDotLastAxis {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct TensorBatchedMatmulLastTwo {
     signature: Signature,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TensorPermuteAxes {
+    signature: Signature,
+}
+
+impl TensorPermuteAxes {
+    fn new() -> Self { Self { signature: Signature::variadic_any(Volatility::Immutable) } }
+}
+
+impl ScalarUDFImpl for TensorPermuteAxes {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "tensor_permute_axes" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let permutation = permutation_from_return_args(&args, self.name())?;
+        let output_shape = permutation_shape(self.name(), &contract.shape, &permutation)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &contract.value_type,
+            &output_shape,
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let tensor = expect_fixed_size_list_arg(&args, 1, self.name())?;
+        let permutation = permutation_from_scalar_args(&args, self.name())?;
+        let output_shape = permutation_shape(self.name(), &contract.shape, &permutation)?;
+        match contract.value_type {
+            DataType::Float32 => invoke_tensor_permute_axes_typed::<Float32Type>(
+                &args,
+                self.name(),
+                tensor,
+                &permutation,
+                &output_shape,
+            ),
+            DataType::Float64 => invoke_tensor_permute_axes_typed::<Float64Type>(
+                &args,
+                self.name(),
+                tensor,
+                &permutation,
+                &output_shape,
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported tensor value type {actual}")))
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TensorContractAxes {
+    signature: Signature,
+}
+
+impl TensorContractAxes {
+    fn new() -> Self { Self { signature: Signature::variadic_any(Volatility::Immutable) } }
+}
+
+impl ScalarUDFImpl for TensorContractAxes {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "tensor_contract_axes" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let left = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.value_type != right.value_type {
+            return Err(plan_error(
+                self.name(),
+                format!(
+                    "tensor value type mismatch: left {}, right {}",
+                    left.value_type, right.value_type
+                ),
+            ));
+        }
+        let (left_axes, right_axes) = contract_axes_from_return_args(&args, self.name())?;
+        let output_shape =
+            contracted_shape(self.name(), &left.shape, &right.shape, &left_axes, &right_axes)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &left.value_type,
+            &output_shape,
+            nullable_or(&args.arg_fields[..2]),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let left_contract = parse_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right_contract = parse_tensor_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left_contract.value_type != right_contract.value_type {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "tensor value type mismatch: left {}, right {}",
+                    left_contract.value_type, right_contract.value_type
+                ),
+            ));
+        }
+        let left = expect_fixed_size_list_arg(&args, 1, self.name())?;
+        let right = expect_fixed_size_list_arg(&args, 2, self.name())?;
+        let (left_axes, right_axes) = contract_axes_from_scalar_args(&args, self.name())?;
+        let output_shape = contracted_shape(
+            self.name(),
+            &left_contract.shape,
+            &right_contract.shape,
+            &left_axes,
+            &right_axes,
+        )?;
+        match left_contract.value_type {
+            DataType::Float32 => invoke_tensor_contract_axes_typed::<Float32Type>(
+                &args,
+                self.name(),
+                left,
+                right,
+                &left_axes,
+                &right_axes,
+                &output_shape,
+            ),
+            DataType::Float64 => invoke_tensor_contract_axes_typed::<Float64Type>(
+                &args,
+                self.name(),
+                left,
+                right,
+                &left_axes,
+                &right_axes,
+                &output_shape,
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported tensor value type {actual}")))
+            }
+        }
+    }
 }
 
 impl TensorBatchedMatmulLastTwo {
@@ -705,6 +1125,16 @@ pub fn tensor_batched_dot_last_axis_udf() -> Arc<ScalarUDF> {
 #[must_use]
 pub fn tensor_batched_matmul_last_two_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(TensorBatchedMatmulLastTwo::new()))
+}
+
+#[must_use]
+pub fn tensor_permute_axes_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(TensorPermuteAxes::new()))
+}
+
+#[must_use]
+pub fn tensor_contract_axes_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(TensorContractAxes::new()))
 }
 
 #[must_use]

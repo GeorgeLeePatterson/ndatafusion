@@ -1,6 +1,6 @@
 # Status Snapshot
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 ## Summary
 
@@ -25,8 +25,8 @@ top of the released upstream contracts.
     canonical standalone ingress and one canonical `rows-of-X` batch carrier.
 12. End-to-end SQL integration coverage now exists for literal-backed constructors, list-column
     constructor pipelines, triangular solve plus matrix-function flows,
-    parameterized matrix-function flows, sparse-plus-variable-tensor composition, and fixed-shape
-    tensor constructor/reduction flows.
+    parameterized matrix-function flows, decomposition-variant flows,
+    sparse-plus-variable-tensor composition, and fixed-shape tensor constructor/reduction flows.
 13. Crate-level rustdoc, docs.rs metadata, and an explicit publish checklist now exist for the
     current constructor-backed surface.
 14. crates.io publication is still intentionally blocked while `ndatafusion` depends on a git
@@ -40,6 +40,19 @@ top of the released upstream contracts.
 17. The matrix-function slice now also covers configurable matrix exponential / logarithm / power
     helpers (`matrix_exp`, `matrix_log_taylor`, `matrix_power`) with scalar-parameter validation,
     direct unit coverage, and SQL integration coverage.
+18. The decomposition slice now also covers reduced and pivoted QR plus truncated, tolerance-based,
+    and null-space SVD helpers, with direct unit coverage and constructor-backed SQL integration
+    coverage.
+19. The decomposition slice now also covers symmetric/generalized eigen, Schur, polar, and both
+    Gram-Schmidt variants, with direct unit coverage, float32 type-propagation coverage, and
+    constructor-backed SQL integration coverage.
+20. The ML/stat slice now also covers dense iterative solvers (`matrix_conjugate_gradient` and
+    `matrix_gmres`) with explicit scalar configuration, direct unit coverage, float32
+    type-propagation coverage, and constructor-backed SQL integration coverage.
+21. The tensor slice now also covers row-wise fixed-shape axis permutation and contraction
+    (`tensor_permute_axes` and `tensor_contract_axes`) with variadic integer-axis SQL contracts,
+    direct unit coverage, float32 type-propagation coverage, and constructor-backed SQL
+    integration coverage.
 
 ## Current Repository Reality
 

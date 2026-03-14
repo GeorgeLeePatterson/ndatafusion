@@ -1,6 +1,6 @@
 # Capability Matrix
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 ## Purpose
 
@@ -37,10 +37,10 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 | Cell codec layer | row extraction and result assembly for lifted `nabled` contracts | Missing | No | Fallback-only layer for workflows that still lack a direct batch-native lower-layer path. |
 | Dense vector surface | row-wise vector kernels (`dot`, norms, cosine, pairwise/batched where natural) | Partial | unit tests | `l2_norm`, `dot`, `cosine_similarity`, `cosine_distance`, and `normalize` now exist for `rows-of-vectors` over `FixedSizeList<Float32|Float64>(D)`. |
 | Dense matrix surface | row-wise matrix kernels and helpers | Partial | unit tests + SQL e2e | Row-wise `matrix_matvec`, batched matrix-matrix product, lower/upper triangular solves, lower/upper triangular matrix solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers now exist over square fixed-shape tensor matrix batches plus fixed-size-list vector batches. |
-| Decomposition surface | struct-returning factorization and solver contracts | Partial | unit tests + SQL e2e | LU, Cholesky, QR, and SVD struct-valued contracts now exist, along with direct QR condition-number and SVD pseudo-inverse / rank / condition-number helpers; additional config-heavy and alternate decomposition variants still remain. |
+| Decomposition surface | struct-returning factorization and solver contracts | Partial | unit tests + SQL e2e | LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD, tolerance-thresholded SVD, SVD null-space, symmetric/generalized eigen, Schur, and polar helpers now exist, along with direct QR condition-number, SVD pseudo-inverse / rank / condition-number, and Gram-Schmidt helpers; residual complex, nonsymmetric spectral, and other config-heavy workflows still remain. |
 | Sparse surface | CSR-aware DataFusion contracts and wrappers | Partial | unit tests | Sparse batch matvec, dense matmat, transpose, and sparse matmat now exist over `ndarrow.csr_matrix_batch`. |
-| Tensor surface | fixed-shape tensor contracts and wrappers | Partial | unit tests | Fixed-shape and variable-shape last-axis reductions, normalization, and batched products now exist on the admitted real-valued surface. |
-| ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests | Column means, centering, covariance, correlation, PCA, and linear regression now exist; callback/config-heavy workflows still remain. |
+| Tensor surface | fixed-shape tensor contracts and wrappers | Partial | unit tests + SQL e2e | Fixed-shape last-axis reductions, normalization, batched products, and row-wise axis permutation / contraction now exist alongside the admitted variable-shape last-axis workflows on the real-valued surface. |
+| ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests + SQL e2e | Column means, centering, covariance, correlation, PCA, dense iterative solvers, and linear regression now exist; callback/config-heavy workflows still remain. |
 | SQL usability | constructors and normalizers from SQL-friendly nested values into canonical contracts | Implemented | unit tests | `make_vector`, `make_matrix`, `make_tensor`, `make_variable_tensor`, and `make_csr_matrix_batch` now cover the admitted real-valued canonical contracts from SQL-style `List` values plus scalar dimensions. |
 | Planner layer | function rewrites or expression planners | Missing | No | Optional for v1 unless required by constructors or ergonomics. |
 | Hardening | examples, integration coverage, docs, and publish checklist readiness | Implemented | `just checks` + `cargo doc --no-default-features --no-deps` | Contract-edge unit coverage, README quick-start examples, crate-level docs, docs.rs metadata, and an explicit publish checklist now exist for the current constructor-backed catalog. |
@@ -65,9 +65,9 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 | Capability Group | Current Status | Gap |
 |---|---|---|
 | Dense vector and matrix kernels | Partial | Core row-preserving real-valued slices are in place, including row-wise matvec, triangular solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers; residual complex and less SQL-natural helpers remain. |
-| Decomposition and solver workflows | Partial | LU, Cholesky, QR, and SVD contracts now exist, including QR least-squares plus SVD pseudo-inverse/rank/condition-number; residual config-heavy and alternate decomposition variants remain. |
-| Sparse and tensor workflows | Partial | Core sparse batch and tensor last-axis workflows now exist on both fixed-shape and variable-shape carriers. |
-| ML/stat workflows | Partial | Stats, PCA, and linear regression now exist on the admitted real-valued surface; iterative and callback-driven workflows remain open. |
+| Decomposition and solver workflows | Partial | LU, Cholesky, QR, reduced QR, pivoted QR, SVD, symmetric/generalized eigen, Schur, and polar contracts now exist, including QR least-squares plus SVD truncated/tolerance/null-space/pseudo-inverse/rank/condition-number helpers and direct Gram-Schmidt variants; residual complex, nonsymmetric spectral, and other config-heavy variants remain. |
+| Sparse and tensor workflows | Partial | Core sparse batch workflows plus fixed-shape tensor last-axis / axis-structure workflows and variable-shape tensor last-axis workflows now exist on the admitted real-valued surface. |
+| ML/stat workflows | Partial | Stats, PCA, dense iterative solvers, and linear regression now exist on the admitted real-valued surface; callback-driven workflows remain open. |
 | Constructor and normalization surface | Implemented | The admitted real-valued constructor set now exists via the `make_*` UDF family over SQL `List` values and explicit shape scalars. |
 | Quality and publish hardening | Implemented | Feature-matrix checks, line coverage > 90%, crate docs, docs.rs metadata, README examples, and the publish checklist now exist. |
 

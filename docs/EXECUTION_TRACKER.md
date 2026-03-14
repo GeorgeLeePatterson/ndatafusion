@@ -1,6 +1,6 @@
 # Execution Tracker
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 ## Purpose
 
@@ -139,6 +139,44 @@ order:
     - shared scalar parsing helpers now cover integer and real scalar contracts directly
     - the current catalog now exposes 57 registered scalar UDFs
     - unit and SQL integration coverage now exercise the new parameterized matrix-function slice
+18. `D-018`: `N-010` has advanced again on decomposition variant parity:
+    - `matrix_qr_reduced` now exists over canonical matrix batches with the reduced QR struct
+      result contract
+    - `matrix_qr_pivoted` now exists over canonical matrix batches with an explicit permutation
+      matrix in the struct result
+    - `matrix_svd_truncated` now exists with an explicit scalar `k` argument
+    - `matrix_svd_with_tolerance` now exists with an explicit scalar tolerance argument
+    - `matrix_svd_null_space` now exists with a variable-shape tensor batch result contract
+    - the current catalog now exposes 62 registered scalar UDFs
+    - unit and SQL integration coverage now exercise the new decomposition-variant slice
+19. `D-019`: `N-010` has advanced again on spectral and orthogonalization parity:
+    - `matrix_eigen_symmetric` now exists over canonical square matrix batches with a struct
+      result contract for eigenvalues plus eigenvectors
+    - `matrix_eigen_generalized` now exists over canonical square matrix-pair batches with the
+      same struct result contract
+    - `matrix_schur` and `matrix_polar` now exist over canonical square matrix batches with
+      paired matrix struct results
+    - `matrix_gram_schmidt` and `matrix_gram_schmidt_classic` now exist over canonical matrix
+      batches as direct orthogonalization helpers
+    - the current catalog now exposes 68 registered scalar UDFs
+    - direct unit coverage, float32 branch coverage, contract-edge validation, and constructor-
+      backed SQL integration coverage now exercise the new spectral slice
+20. `D-020`: `N-010` has advanced again on iterative-solver parity:
+    - `matrix_conjugate_gradient` now exists over canonical square matrix/vector batch carriers
+      with explicit scalar `tolerance` and `max_iterations` arguments
+    - `matrix_gmres` now exists over canonical square matrix/vector batch carriers with the same
+      explicit scalar configuration
+    - the current catalog now exposes 70 registered scalar UDFs
+    - direct unit coverage, float32 branch coverage, contract-edge validation, and constructor-
+      backed SQL integration coverage now exercise the iterative solver slice
+21. `D-021`: `N-010` has advanced again on fixed-shape tensor parity:
+    - `tensor_permute_axes` now exists over canonical fixed-shape tensor batches with variadic
+      integer-axis SQL arguments and row-preserving batch semantics
+    - `tensor_contract_axes` now exists over canonical fixed-shape tensor batches with variadic
+      left/right integer-axis pairs and row-preserving batch semantics
+    - the current catalog now exposes 72 registered scalar UDFs
+    - direct unit coverage, float32 branch coverage, contract-edge validation, and constructor-
+      backed SQL integration coverage now exercise the new tensor-axis slice
 
 ## Next
 

@@ -79,21 +79,23 @@ canonical numerical contracts used by the linalg/ml UDFs:
 ## Status
 
 The current implementation is no longer scaffold-only. `ndatafusion` now registers a substantial
-direct batch-native catalog across 57 scalar UDFs:
+direct batch-native catalog across 72 scalar UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
 2. dense vector row ops
 3. dense matrix matvec, batched matmul, lower/upper triangular solves, and
    LU/Cholesky/QR least-squares solves
-4. struct-valued LU, Cholesky, QR, SVD, and PCA workflows
-5. matrix inverse, determinant, log-determinant, QR condition number, SVD pseudo-inverse /
-   condition number / rank, zero-config matrix functions (`matrix_exp_eigen`,
-   `matrix_log_eigen`, `matrix_log_svd`, `matrix_sign`), and configurable matrix functions
-   (`matrix_exp`, `matrix_log_taylor`, `matrix_power`)
+4. struct-valued LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD,
+   tolerance-thresholded SVD, symmetric/generalized eigen, Schur, polar, and PCA workflows
+5. matrix inverse, determinant, log-determinant, QR condition number, SVD null-space,
+   pseudo-inverse / condition number / rank, Gram-Schmidt variants, zero-config matrix functions
+   (`matrix_exp_eigen`, `matrix_log_eigen`, `matrix_log_svd`, `matrix_sign`), and configurable
+   matrix functions (`matrix_exp`, `matrix_log_taylor`, `matrix_power`)
 6. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
-7. fixed-shape and variable-shape tensor last-axis reductions, normalization, and batched products
-8. matrix column means and linear regression
+7. fixed-shape tensor last-axis reductions, normalization, batched products, row-wise
+   permutation/contraction, and variable-shape tensor last-axis workflows
+8. matrix column means, PCA, dense iterative solvers, and linear regression
 
 The current admitted real-valued surface supports `Float32` and `Float64` across the implemented
 catalog. The crate also has end-to-end SQL integration coverage for:
@@ -102,8 +104,12 @@ catalog. The crate also has end-to-end SQL integration coverage for:
 2. list-column-backed vector and matrix queries
 3. triangular solve plus matrix-function queries
 4. parameterized matrix-function queries
-5. sparse plus variable-shape tensor composition
-6. fixed-shape tensor constructor plus reduction pipelines
+5. decomposition-variant queries
+6. spectral / orthogonalization queries
+7. iterative solver queries
+8. sparse plus variable-shape tensor composition
+9. fixed-shape tensor constructor plus reduction pipelines
+10. fixed-shape tensor axis permutation / contraction queries
 
 The next milestone is residual admitted parity on top of the current constructor-backed
 real-valued catalog. Actual crates.io publication remains blocked until `ndatafusion` can depend

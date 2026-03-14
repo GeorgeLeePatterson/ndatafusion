@@ -327,6 +327,63 @@ fn invoke_udf_error(
         .to_string()
 }
 
+fn assert_eigen_struct_output(return_field: &FieldRef, output: &ColumnarValue, min: f64, max: f64) {
+    let DataType::Struct(fields) = return_field.data_type() else {
+        panic!("expected eigen struct return");
+    };
+    let output = struct_array(output);
+    let eigenvalues =
+        output.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("eigenvalues");
+    let eigenvalues =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(eigenvalues).expect("eigenvalue tensor");
+    let eigenvectors =
+        output.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("eigenvectors");
+    let eigenvectors =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[1], eigenvectors)
+            .expect("eigenvector tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 eigenvectors");
+    assert_close(eigenvalues.row(0).iter().copied().fold(f64::INFINITY, f64::min), min);
+    assert_close(eigenvalues.row(0).iter().copied().fold(f64::NEG_INFINITY, f64::max), max);
+    assert_close(eigenvectors.iter().map(|value| value.abs()).sum::<f64>(), 2.0);
+}
+
+fn assert_two_tensor_struct_output(
+    return_field: &FieldRef,
+    output: &ColumnarValue,
+    min: f64,
+    max: f64,
+) {
+    let DataType::Struct(fields) = return_field.data_type() else {
+        panic!("expected two-tensor struct return");
+    };
+    let output = struct_array(output);
+    let first =
+        output.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("first tensor");
+    let first = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[0], first)
+        .expect("first tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 first tensor");
+    let second =
+        output.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("second tensor");
+    let second = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[1], second)
+        .expect("second tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 second tensor");
+    let diagonal = [second[[0, 0, 0]], second[[0, 1, 1]]];
+    assert_close(first.iter().map(|value| value.abs()).sum::<f64>(), 2.0);
+    assert_close(second[[0, 0, 1]], 0.0);
+    assert_close(second[[0, 1, 0]], 0.0);
+    assert_close(diagonal.into_iter().fold(f64::INFINITY, f64::min), min);
+    assert_close(diagonal.into_iter().fold(f64::NEG_INFINITY, f64::max), max);
+}
+
+fn assert_orthogonal_matrix_output(return_field: &FieldRef, output: &ColumnarValue) {
+    let orthogonal = fixed_shape_view3(return_field, output);
+    assert_close(orthogonal[[0, 0, 0]], 1.0);
+    assert_close(orthogonal[[0, 1, 1]], 1.0);
+}
+
 #[test]
 fn constructor_udfs_build_fixed_shape_contracts() {
     let make_vector_udf = udfs::make_vector_udf();
@@ -1129,6 +1186,415 @@ fn matrix_qr_and_svd_udfs_cover_struct_outputs() {
 }
 
 #[test]
+fn matrix_qr_variant_udfs_cover_struct_outputs() {
+    let qr_reduced_udf = udfs::matrix_qr_reduced_udf();
+    let qr_pivoted_udf = udfs::matrix_qr_pivoted_udf();
+
+    let (reduced_field, reduced_matrices) =
+        matrix_batch("qr_reduced", [[[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]]]);
+    let (reduced_return_field, reduced_output) = invoke_udf(
+        &qr_reduced_udf,
+        vec![ColumnarValue::Array(Arc::new(reduced_matrices))],
+        vec![reduced_field],
+        &[None],
+        1,
+    )
+    .expect("matrix_qr_reduced");
+    let DataType::Struct(reduced_fields) = reduced_return_field.data_type() else {
+        panic!("expected reduced QR struct return");
+    };
+    let reduced = struct_array(&reduced_output);
+    let q = reduced.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("q tensor");
+    let q = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&reduced_fields[0], q)
+        .expect("q tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 tensor");
+    let r = reduced.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("r tensor");
+    let r = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&reduced_fields[1], r)
+        .expect("r tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 tensor");
+    let rank = reduced.column(2).as_any().downcast_ref::<Int64Array>().expect("rank");
+    assert_eq!(q.dim(), (1, 3, 2));
+    assert_eq!(r.dim(), (1, 2, 2));
+    assert_eq!(rank.value(0), 2);
+    assert_close(r[[0, 0, 0]], 1.0);
+    assert_close(r[[0, 1, 1]], 2.0);
+
+    let (pivoted_field, pivoted_matrices) = matrix_batch("qr_pivoted", [[[1.0, 0.0], [0.0, 3.0]]]);
+    let (pivoted_return_field, pivoted_output) = invoke_udf(
+        &qr_pivoted_udf,
+        vec![ColumnarValue::Array(Arc::new(pivoted_matrices))],
+        vec![pivoted_field],
+        &[None],
+        1,
+    )
+    .expect("matrix_qr_pivoted");
+    let DataType::Struct(pivoted_fields) = pivoted_return_field.data_type() else {
+        panic!("expected pivoted QR struct return");
+    };
+    let pivoted = struct_array(&pivoted_output);
+    let permutation =
+        pivoted.column(2).as_any().downcast_ref::<FixedSizeListArray>().expect("p tensor");
+    let permutation =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&pivoted_fields[2], permutation)
+            .expect("p tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 tensor");
+    let rank = pivoted.column(3).as_any().downcast_ref::<Int64Array>().expect("rank");
+    assert_eq!(rank.value(0), 2);
+    assert_close(permutation[[0, 0, 1]], 1.0);
+    assert_close(permutation[[0, 1, 0]], 1.0);
+}
+
+#[test]
+fn matrix_svd_variant_udfs_cover_struct_and_variable_outputs() {
+    let svd_truncated_udf = udfs::matrix_svd_truncated_udf();
+    let svd_tolerance_udf = udfs::matrix_svd_with_tolerance_udf();
+    let svd_null_space_udf = udfs::matrix_svd_null_space_udf();
+
+    let (truncated_field, truncated_matrices) =
+        matrix_batch("svd_truncated", [[[9.0, 0.0], [0.0, 4.0]]]);
+    let (truncated_return_field, truncated_output) = invoke_udf(
+        &svd_truncated_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(truncated_matrices)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ],
+        vec![truncated_field, Arc::new(Field::new("k", DataType::Int64, false))],
+        &[None, Some(ScalarValue::Int64(Some(1)))],
+        1,
+    )
+    .expect("matrix_svd_truncated");
+    let DataType::Struct(truncated_fields) = truncated_return_field.data_type() else {
+        panic!("expected truncated SVD struct return");
+    };
+    let truncated = struct_array(&truncated_output);
+    let u = truncated.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("u tensor");
+    let u = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&truncated_fields[0], u)
+        .expect("u tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 tensor");
+    let singular_values = truncated
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("singular values");
+    let singular_values = ndarrow::fixed_size_list_as_array2::<Float64Type>(singular_values)
+        .expect("singular values");
+    let vt = truncated.column(2).as_any().downcast_ref::<FixedSizeListArray>().expect("vt tensor");
+    let vt = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&truncated_fields[2], vt)
+        .expect("vt tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 tensor");
+    assert_eq!(u.dim(), (1, 2, 1));
+    assert_eq!(vt.dim(), (1, 1, 2));
+    assert_close(singular_values[[0, 0]], 9.0);
+
+    let (tolerance_field, tolerance_matrices) =
+        matrix_batch("svd_tolerance", [[[5.0, 0.0], [0.0, 1.0]]]);
+    let (tolerance_return_field, tolerance_output) = invoke_udf(
+        &svd_tolerance_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(tolerance_matrices)),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))),
+        ],
+        vec![tolerance_field, Arc::new(Field::new("tolerance", DataType::Float64, false))],
+        &[None, Some(ScalarValue::Float64(Some(2.0)))],
+        1,
+    )
+    .expect("matrix_svd_with_tolerance");
+    let DataType::Struct(tolerance_fields) = tolerance_return_field.data_type() else {
+        panic!("expected tolerance SVD struct return");
+    };
+    let tolerance = struct_array(&tolerance_output);
+    let singular_values = tolerance
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("singular values");
+    let singular_values = ndarrow::fixed_size_list_as_array2::<Float64Type>(singular_values)
+        .expect("singular values");
+    let vt = tolerance.column(2).as_any().downcast_ref::<FixedSizeListArray>().expect("vt tensor");
+    let vt = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&tolerance_fields[2], vt)
+        .expect("vt tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 tensor");
+    assert_eq!(vt.dim(), (1, 2, 2));
+    assert_close(singular_values[[0, 0]], 5.0);
+    assert_close(singular_values[[0, 1]], 0.0);
+
+    let (null_space_field, null_space_matrices) =
+        matrix_batch("null_space", [[[1.0, 1.0], [1.0, 1.0]], [[0.0, 0.0], [0.0, 0.0]]]);
+    let (null_space_return_field, null_space_output) = invoke_udf(
+        &svd_null_space_udf,
+        vec![ColumnarValue::Array(Arc::new(null_space_matrices))],
+        vec![null_space_field],
+        &[None],
+        2,
+    )
+    .expect("matrix_svd_null_space");
+    let mut rows = variable_shape_rows(&null_space_return_field, &null_space_output);
+    let (_, basis0) = rows.next().expect("basis0").expect("basis0 tensor");
+    let (_, basis1) = rows.next().expect("basis1").expect("basis1 tensor");
+    assert_eq!(basis0.shape(), &[2, 1]);
+    assert_eq!(basis1.shape(), &[2, 2]);
+}
+
+#[test]
+fn matrix_svd_variant_udfs_validate_scalar_contracts() {
+    let svd_truncated_udf = udfs::matrix_svd_truncated_udf();
+    let svd_tolerance_udf = udfs::matrix_svd_with_tolerance_udf();
+    let (field, matrices) = matrix_batch("svd", [[[1.0, 0.0], [0.0, 1.0]]]);
+    let k_field = Arc::new(Field::new("k", DataType::Int64, false));
+    let tolerance_field = Arc::new(Field::new("tolerance", DataType::Float64, false));
+
+    let zero_k_error = invoke_udf_error(
+        &svd_truncated_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![Arc::clone(&field), Arc::clone(&k_field)],
+        &[None, Some(ScalarValue::Int64(Some(0)))],
+        1,
+    );
+    let tolerance_error = invoke_udf_error(
+        &svd_tolerance_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(-1.0))),
+        ],
+        vec![Arc::clone(&field), Arc::clone(&tolerance_field)],
+        &[None, Some(ScalarValue::Float64(Some(-1.0)))],
+        1,
+    );
+    let scalar_error = invoke_udf_error(
+        &svd_truncated_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices)),
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![1_i64]))),
+        ],
+        vec![field, k_field],
+        &[None, Some(ScalarValue::Int64(Some(1)))],
+        1,
+    );
+
+    assert!(zero_k_error.contains("k must be greater than 0"));
+    assert!(tolerance_error.contains("tolerance must be non-negative"));
+    assert!(scalar_error.contains("argument 2 must be an integer scalar"));
+}
+
+#[test]
+fn matrix_decomposition_variant_udfs_cover_float32_branches() {
+    let (qr_field, qr_matrices) =
+        matrix_batch_f32("qr_rect", [[[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]]]);
+    for udf in [udfs::matrix_qr_reduced_udf(), udfs::matrix_qr_pivoted_udf()] {
+        let (field, output) = invoke_udf(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(qr_matrices.clone()))],
+            vec![Arc::clone(&qr_field)],
+            &[None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), field.data_type());
+    }
+
+    let (svd_field, svd_matrices) = matrix_batch_f32("svd", [[[4.0, 0.0], [0.0, 2.0]]]);
+    let svd_cases = [
+        (
+            udfs::matrix_svd_truncated_udf(),
+            Arc::clone(&svd_field),
+            svd_matrices.clone(),
+            vec![ColumnarValue::Scalar(ScalarValue::Int64(Some(1)))],
+            vec![Arc::new(Field::new("k", DataType::Int64, false))],
+        ),
+        (
+            udfs::matrix_svd_with_tolerance_udf(),
+            Arc::clone(&svd_field),
+            svd_matrices.clone(),
+            vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0)))],
+            vec![Arc::new(Field::new("tolerance", DataType::Float64, false))],
+        ),
+    ];
+    for (udf, field, values, scalar_args, scalar_fields) in svd_cases {
+        let mut args = vec![ColumnarValue::Array(Arc::new(values))];
+        args.extend(scalar_args.clone());
+        let mut arg_fields = vec![field];
+        arg_fields.extend(scalar_fields);
+        let scalar_refs = scalar_args
+            .into_iter()
+            .map(|value| match value {
+                ColumnarValue::Scalar(value) => Some(value),
+                ColumnarValue::Array(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut refs = vec![None];
+        refs.extend(scalar_refs);
+        let (field, output) = invoke_udf(&udf, args, arg_fields, &refs, 1)
+            .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), field.data_type());
+    }
+
+    let (null_space_field, null_space_matrices) =
+        matrix_batch_f32("null_space", [[[1.0, 1.0], [1.0, 1.0]]]);
+    let (field, output) = invoke_udf(
+        &udfs::matrix_svd_null_space_udf(),
+        vec![ColumnarValue::Array(Arc::new(null_space_matrices))],
+        vec![null_space_field],
+        &[None],
+        1,
+    )
+    .expect("matrix_svd_null_space f32");
+    assert_eq!(array_data_type(&output), field.data_type());
+}
+
+#[test]
+fn matrix_spectral_and_orthogonalization_udfs_cover_outputs() {
+    let (spectral_field, spectral_matrices) = matrix_batch("spectral", [[[4.0, 0.0], [0.0, 9.0]]]);
+    let (identity_field, identity_matrices) = matrix_batch("identity", [[[1.0, 0.0], [0.0, 1.0]]]);
+    let (spectral_return_field, spectral_output) = invoke_udf(
+        &udfs::matrix_eigen_symmetric_udf(),
+        vec![ColumnarValue::Array(Arc::new(spectral_matrices.clone()))],
+        vec![Arc::clone(&spectral_field)],
+        &[None],
+        1,
+    )
+    .expect("matrix_eigen_symmetric");
+    assert_eigen_struct_output(&spectral_return_field, &spectral_output, 4.0, 9.0);
+
+    let (generalized_return_field, generalized_output) = invoke_udf(
+        &udfs::matrix_eigen_generalized_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(spectral_matrices.clone())),
+            ColumnarValue::Array(Arc::new(identity_matrices)),
+        ],
+        vec![Arc::clone(&spectral_field), identity_field],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_eigen_generalized");
+    assert_eigen_struct_output(&generalized_return_field, &generalized_output, 4.0, 9.0);
+
+    let (schur_return_field, schur_output) = invoke_udf(
+        &udfs::matrix_schur_udf(),
+        vec![ColumnarValue::Array(Arc::new(spectral_matrices.clone()))],
+        vec![Arc::clone(&spectral_field)],
+        &[None],
+        1,
+    )
+    .expect("matrix_schur");
+    assert_two_tensor_struct_output(&schur_return_field, &schur_output, 4.0, 9.0);
+
+    let (polar_return_field, polar_output) = invoke_udf(
+        &udfs::matrix_polar_udf(),
+        vec![ColumnarValue::Array(Arc::new(spectral_matrices.clone()))],
+        vec![Arc::clone(&spectral_field)],
+        &[None],
+        1,
+    )
+    .expect("matrix_polar");
+    assert_two_tensor_struct_output(&polar_return_field, &polar_output, 4.0, 9.0);
+
+    for udf in [udfs::matrix_gram_schmidt_udf(), udfs::matrix_gram_schmidt_classic_udf()] {
+        let (field, output) = invoke_udf(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(spectral_matrices.clone()))],
+            vec![Arc::clone(&spectral_field)],
+            &[None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} output: {error}", udf.name()));
+        assert_orthogonal_matrix_output(&field, &output);
+    }
+}
+
+#[test]
+fn matrix_spectral_and_orthogonalization_udfs_cover_float32_branches() {
+    let (spectral_field, spectral_matrices) =
+        matrix_batch_f32("spectral", [[[4.0, 0.0], [0.0, 9.0]]]);
+    let (identity_field, identity_matrices) =
+        matrix_batch_f32("identity", [[[1.0, 0.0], [0.0, 1.0]]]);
+
+    for udf in [
+        udfs::matrix_eigen_symmetric_udf(),
+        udfs::matrix_schur_udf(),
+        udfs::matrix_polar_udf(),
+        udfs::matrix_gram_schmidt_udf(),
+        udfs::matrix_gram_schmidt_classic_udf(),
+    ] {
+        let (field, output) = invoke_udf(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(spectral_matrices.clone()))],
+            vec![Arc::clone(&spectral_field)],
+            &[None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), field.data_type());
+    }
+
+    let (field, output) = invoke_udf(
+        &udfs::matrix_eigen_generalized_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(spectral_matrices)),
+            ColumnarValue::Array(Arc::new(identity_matrices)),
+        ],
+        vec![spectral_field, identity_field],
+        &[None, None],
+        1,
+    )
+    .expect("matrix_eigen_generalized f32");
+    assert_eq!(array_data_type(&output), field.data_type());
+}
+
+#[test]
+fn matrix_spectral_udfs_validate_square_and_pair_contracts() {
+    let (rect_field, rect_matrices) = matrix_batch("rect", [[[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]]);
+    for udf in
+        [udfs::matrix_eigen_symmetric_udf(), udfs::matrix_schur_udf(), udfs::matrix_polar_udf()]
+    {
+        let error = invoke_udf_error(
+            &udf,
+            vec![ColumnarValue::Array(Arc::new(rect_matrices.clone()))],
+            vec![Arc::clone(&rect_field)],
+            &[None],
+            1,
+        );
+        assert!(error.contains("requires square matrices"), "{}: {error}", udf.name());
+    }
+
+    let (left_field, left_matrices) = matrix_batch("left", [[[4.0, 0.0], [0.0, 9.0]]]);
+    let (right_field, right_matrices) = matrix_batch_f32("right", [[[1.0, 0.0], [0.0, 1.0]]]);
+    let value_type_error = invoke_udf_error(
+        &udfs::matrix_eigen_generalized_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left_matrices.clone())),
+            ColumnarValue::Array(Arc::new(right_matrices)),
+        ],
+        vec![Arc::clone(&left_field), right_field],
+        &[None, None],
+        1,
+    );
+    assert!(value_type_error.contains("matrix value type mismatch"));
+
+    let (shape_field, shape_matrices) =
+        matrix_batch("shape", [[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]]);
+    let shape_error = invoke_udf_error(
+        &udfs::matrix_eigen_generalized_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left_matrices)),
+            ColumnarValue::Array(Arc::new(shape_matrices)),
+        ],
+        vec![left_field, shape_field],
+        &[None, None],
+        1,
+    );
+    assert!(shape_error.contains("matrix shape mismatch"));
+}
+
+#[test]
 fn matrix_qr_and_svd_helper_udfs_cover_solver_scalar_and_inverse_outputs() {
     let qr_solve_udf = udfs::matrix_qr_solve_least_squares_udf();
     let qr_condition_udf = udfs::matrix_qr_condition_number_udf();
@@ -1618,6 +2084,193 @@ fn matrix_stats_and_pca_udfs_cover_batch_outputs() {
 }
 
 #[test]
+fn iterative_solver_udfs_cover_outputs() {
+    let (field, matrices) =
+        matrix_batch("iterative", [[[4.0, 1.0], [1.0, 3.0]], [[10.0, 2.0], [2.0, 5.0]]]);
+    let rhs = fixed_size_list([[1.0, 2.0], [12.0, 7.0]]);
+    let rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
+    let tolerance = ScalarValue::Float64(Some(1.0e-12));
+    let max_iterations = ScalarValue::Int64(Some(64));
+    let tolerance_field = Arc::new(Field::new("tolerance", DataType::Float64, false));
+    let max_iterations_field = Arc::new(Field::new("max_iterations", DataType::Int64, false));
+
+    for udf in [udfs::matrix_conjugate_gradient_udf(), udfs::matrix_gmres_udf()] {
+        let (_, output) = invoke_udf(
+            &udf,
+            vec![
+                ColumnarValue::Array(Arc::new(matrices.clone())),
+                ColumnarValue::Array(Arc::new(rhs.clone())),
+                ColumnarValue::Scalar(tolerance.clone()),
+                ColumnarValue::Scalar(max_iterations.clone()),
+            ],
+            vec![
+                Arc::clone(&field),
+                Arc::clone(&rhs_field),
+                Arc::clone(&tolerance_field),
+                Arc::clone(&max_iterations_field),
+            ],
+            &[None, None, Some(tolerance.clone()), Some(max_iterations.clone())],
+            2,
+        )
+        .unwrap_or_else(|error| panic!("{} output: {error}", udf.name()));
+        let output =
+            ndarrow::fixed_size_list_as_array2::<Float64Type>(fixed_size_list_array(&output))
+                .expect("iterative output");
+        assert_close(output[[0, 0]], 1.0 / 11.0);
+        assert_close(output[[0, 1]], 7.0 / 11.0);
+        assert_close(output[[1, 0]], 1.0);
+        assert_close(output[[1, 1]], 1.0);
+    }
+}
+
+#[test]
+fn iterative_solver_udfs_validate_scalar_contracts() {
+    let (field, matrices) = matrix_batch("iterative", [[[4.0, 1.0], [1.0, 3.0]]]);
+    let rhs = fixed_size_list([[1.0, 2.0]]);
+    let rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
+    let tolerance_field = Arc::new(Field::new("tolerance", DataType::Float64, false));
+    let max_iterations_field = Arc::new(Field::new("max_iterations", DataType::Int64, false));
+
+    let tolerance_error = invoke_udf_error(
+        &udfs::matrix_conjugate_gradient_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(-1.0))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(32))),
+        ],
+        vec![
+            Arc::clone(&field),
+            Arc::clone(&rhs_field),
+            Arc::clone(&tolerance_field),
+            Arc::clone(&max_iterations_field),
+        ],
+        &[None, None, Some(ScalarValue::Float64(Some(-1.0))), Some(ScalarValue::Int64(Some(32)))],
+        1,
+    );
+    let max_iterations_error = invoke_udf_error(
+        &udfs::matrix_gmres_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-12))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![
+            Arc::clone(&field),
+            Arc::clone(&rhs_field),
+            Arc::clone(&tolerance_field),
+            Arc::clone(&max_iterations_field),
+        ],
+        &[None, None, Some(ScalarValue::Float64(Some(1.0e-12))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    );
+    let scalar_error = invoke_udf_error(
+        &udfs::matrix_conjugate_gradient_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices)),
+            ColumnarValue::Array(Arc::new(rhs)),
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![1.0e-6]))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(32))),
+        ],
+        vec![field, rhs_field, tolerance_field, max_iterations_field],
+        &[None, None, Some(ScalarValue::Float64(Some(1.0e-6))), Some(ScalarValue::Int64(Some(32)))],
+        1,
+    );
+
+    assert!(tolerance_error.contains("tolerance must be positive"));
+    assert!(max_iterations_error.contains("max_iterations must be greater than 0"));
+    assert!(scalar_error.contains("argument 3 must be a numeric scalar"));
+}
+
+#[test]
+fn iterative_solver_udfs_validate_shape_contracts() {
+    let (field, matrices) = matrix_batch("iterative", [[[4.0, 1.0], [1.0, 3.0]]]);
+    let rhs = fixed_size_list([[1.0, 2.0]]);
+    let rhs_field = vector_field("rhs", &DataType::Float64, 2, false).expect("rhs field");
+    let tolerance_field = Arc::new(Field::new("tolerance", DataType::Float64, false));
+    let max_iterations_field = Arc::new(Field::new("max_iterations", DataType::Int64, false));
+    let (rect_field, rect_matrices) = matrix_batch("rect", [[[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]]);
+    let rect_error = invoke_udf_error(
+        &udfs::matrix_gmres_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(rect_matrices)),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-12))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(32))),
+        ],
+        vec![
+            rect_field,
+            Arc::clone(&rhs_field),
+            Arc::clone(&tolerance_field),
+            Arc::clone(&max_iterations_field),
+        ],
+        &[
+            None,
+            None,
+            Some(ScalarValue::Float64(Some(1.0e-12))),
+            Some(ScalarValue::Int64(Some(32))),
+        ],
+        1,
+    );
+    let wrong_rhs_field = vector_field("rhs_long", &DataType::Float64, 3, false).expect("rhs");
+    let wrong_rhs = fixed_size_list([[1.0, 2.0, 3.0]]);
+    let rhs_error = invoke_udf_error(
+        &udfs::matrix_conjugate_gradient_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices)),
+            ColumnarValue::Array(Arc::new(wrong_rhs)),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-12))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(32))),
+        ],
+        vec![field, wrong_rhs_field, tolerance_field, max_iterations_field],
+        &[
+            None,
+            None,
+            Some(ScalarValue::Float64(Some(1.0e-12))),
+            Some(ScalarValue::Int64(Some(32))),
+        ],
+        1,
+    );
+
+    assert!(rect_error.contains("requires square matrices"));
+    assert!(rhs_error.contains("rhs vector length mismatch"));
+}
+
+#[test]
+fn iterative_solver_udfs_cover_float32_branches() {
+    let (field, matrices) = matrix_batch_f32("iterative", [[[4.0, 1.0], [1.0, 3.0]]]);
+    let rhs_field = vector_field("rhs", &DataType::Float32, 2, false).expect("rhs field");
+    let rhs = fixed_size_list_f32([[1.0, 2.0]]);
+    let tolerance = ScalarValue::Float64(Some(1.0e-6));
+    let max_iterations = ScalarValue::Int64(Some(32));
+    let tolerance_field = Arc::new(Field::new("tolerance", DataType::Float64, false));
+    let max_iterations_field = Arc::new(Field::new("max_iterations", DataType::Int64, false));
+
+    for udf in [udfs::matrix_conjugate_gradient_udf(), udfs::matrix_gmres_udf()] {
+        let (return_field, output) = invoke_udf(
+            &udf,
+            vec![
+                ColumnarValue::Array(Arc::new(matrices.clone())),
+                ColumnarValue::Array(Arc::new(rhs.clone())),
+                ColumnarValue::Scalar(tolerance.clone()),
+                ColumnarValue::Scalar(max_iterations.clone()),
+            ],
+            vec![
+                Arc::clone(&field),
+                Arc::clone(&rhs_field),
+                Arc::clone(&tolerance_field),
+                Arc::clone(&max_iterations_field),
+            ],
+            &[None, None, Some(tolerance.clone()), Some(max_iterations.clone())],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), return_field.data_type());
+    }
+}
+
+#[test]
 fn sparse_batch_udfs_cover_dense_sparse_products_and_transpose() {
     let (left_field, left) = sparse_batch("left");
     let (right_dense_field, right_dense) = ragged_matrices("right_dense", vec![
@@ -1757,6 +2410,191 @@ fn tensor_fixed_shape_last_axis_udfs_cover_outputs() {
     assert_close(dots[[0, 1]], 10.0);
     assert_close(dots[[1, 0]], 240.0);
     assert_close(dots[[1, 1]], 336.0);
+}
+
+#[test]
+fn tensor_fixed_shape_axis_udfs_cover_outputs() {
+    let (permute_input_field, permute_tensor) =
+        matrix_batch("permute_tensor", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
+    let (contract_left_field, contract_left) =
+        matrix_batch("contract_left", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
+    let (contract_right_field, contract_right) =
+        matrix_batch("contract_right", [[[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]]);
+    let permute_udf = udfs::tensor_permute_axes_udf();
+    let contract_udf = udfs::tensor_contract_axes_udf();
+    let axis_field = Arc::new(Field::new("axis", DataType::Int64, false));
+
+    let (permuted_field, permuted) = invoke_udf(
+        &permute_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(permute_tensor)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![Arc::clone(&permute_input_field), Arc::clone(&axis_field), Arc::clone(&axis_field)],
+        &[None, Some(ScalarValue::Int64(Some(1))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    )
+    .expect("tensor_permute_axes");
+    let permuted = fixed_shape_view3(&permuted_field, &permuted);
+    assert_close(permuted[[0, 0, 0]], 1.0);
+    assert_close(permuted[[0, 0, 1]], 4.0);
+    assert_close(permuted[[0, 2, 0]], 3.0);
+    assert_close(permuted[[0, 2, 1]], 6.0);
+
+    let (contracted_field, contracted) = invoke_udf(
+        &contract_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(contract_left)),
+            ColumnarValue::Array(Arc::new(contract_right)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![
+            contract_left_field,
+            contract_right_field,
+            Arc::clone(&axis_field),
+            Arc::clone(&axis_field),
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(1))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    )
+    .expect("tensor_contract_axes");
+    let contracted = fixed_shape_view3(&contracted_field, &contracted);
+    assert_close(contracted[[0, 0, 0]], 58.0);
+    assert_close(contracted[[0, 0, 1]], 64.0);
+    assert_close(contracted[[0, 1, 0]], 139.0);
+    assert_close(contracted[[0, 1, 1]], 154.0);
+}
+
+#[test]
+fn tensor_axis_udfs_validate_contract_edges() {
+    let permute_udf = udfs::tensor_permute_axes_udf();
+    let contract_udf = udfs::tensor_contract_axes_udf();
+    let (tensor_field, tensor) = matrix_batch("tensor", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
+    let (right_field, right) = matrix_batch("right", [[[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]]);
+    let axis_field = Arc::new(Field::new("axis", DataType::Int64, false));
+
+    let permutation_error = invoke_udf_error(
+        &permute_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(tensor.clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![Arc::clone(&tensor_field), Arc::clone(&axis_field)],
+        &[None, Some(ScalarValue::Int64(Some(0)))],
+        1,
+    );
+    let duplicate_error = invoke_udf_error(
+        &permute_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(tensor.clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![Arc::clone(&tensor_field), Arc::clone(&axis_field), Arc::clone(&axis_field)],
+        &[None, Some(ScalarValue::Int64(Some(0))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    );
+    let runtime_scalar_error = invoke_udf_error(
+        &permute_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(tensor.clone())),
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![1_i64]))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![Arc::clone(&tensor_field), Arc::clone(&axis_field), Arc::clone(&axis_field)],
+        &[None, Some(ScalarValue::Int64(Some(1))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    );
+    let contract_count_error = invoke_udf_error(
+        &contract_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(tensor.clone())),
+            ColumnarValue::Array(Arc::new(right.clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![
+            Arc::clone(&tensor_field),
+            Arc::clone(&right_field),
+            Arc::clone(&axis_field),
+            Arc::clone(&axis_field),
+            Arc::clone(&axis_field),
+        ],
+        &[
+            None,
+            None,
+            Some(ScalarValue::Int64(Some(0))),
+            Some(ScalarValue::Int64(Some(1))),
+            Some(ScalarValue::Int64(Some(0))),
+        ],
+        1,
+    );
+    let contract_shape_error = invoke_udf_error(
+        &contract_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(tensor)),
+            ColumnarValue::Array(Arc::new(right)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![tensor_field, right_field, Arc::clone(&axis_field), Arc::clone(&axis_field)],
+        &[None, None, Some(ScalarValue::Int64(Some(0))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    );
+
+    assert!(permutation_error.contains("requires permutation length"));
+    assert!(duplicate_error.contains("duplicate axis"));
+    assert!(runtime_scalar_error.contains("must be an integer scalar"));
+    assert!(contract_count_error.contains("requires one or more left/right axis pairs"));
+    assert!(contract_shape_error.contains("axis mismatch"));
+}
+
+#[test]
+fn tensor_axis_udfs_cover_float32_branches() {
+    let (permute_input_field, permute_tensor) =
+        matrix_batch_f32("permute_tensor", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
+    let (contract_left_field, contract_left) =
+        matrix_batch_f32("contract_left", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
+    let (contract_right_field, contract_right) =
+        matrix_batch_f32("contract_right", [[[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]]);
+    let axis_field = Arc::new(Field::new("axis", DataType::Int64, false));
+
+    let (permuted_field, permuted) = invoke_udf(
+        &udfs::tensor_permute_axes_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(permute_tensor)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![permute_input_field, Arc::clone(&axis_field), Arc::clone(&axis_field)],
+        &[None, Some(ScalarValue::Int64(Some(1))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    )
+    .expect("tensor_permute_axes f32");
+    assert_eq!(array_data_type(&permuted), permuted_field.data_type());
+
+    let (contracted_field, contracted) = invoke_udf(
+        &udfs::tensor_contract_axes_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(contract_left)),
+            ColumnarValue::Array(Arc::new(contract_right)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+        ],
+        vec![
+            contract_left_field,
+            contract_right_field,
+            Arc::clone(&axis_field),
+            Arc::clone(&axis_field),
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(1))), Some(ScalarValue::Int64(Some(0)))],
+        1,
+    )
+    .expect("tensor_contract_axes f32");
+    assert_eq!(array_data_type(&contracted), contracted_field.data_type());
 }
 
 #[test]
