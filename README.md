@@ -68,6 +68,8 @@ extension-backed matrix, tensor, and sparse batch layouts emitted by `ndarrow`:
 ## Status
 
 For the user-facing SQL catalog, see [CATALOG.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/CATALOG.md).
+For quick copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
+For runnable examples, see `cargo run --example hello_sql`, `cargo run --example direct_arrow_vectors`, and `cargo run --example pca_pipeline`.
 
 `ndatafusion` registers a direct batch-native catalog across 78 scalar UDFs:
 

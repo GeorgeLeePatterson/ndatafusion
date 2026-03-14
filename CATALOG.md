@@ -3,6 +3,7 @@
 Last updated: 2026-03-14
 
 This document is the current inventory of the `ndatafusion` SQL catalog.
+For small copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
 
 Constructor UDFs are only needed when SQL starts from ordinary nested `List` values. If a table
 already stores the canonical Arrow contract expected by a UDF, such as

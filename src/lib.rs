@@ -65,7 +65,7 @@
 //! - statistics, PCA, iterative solvers, and linear regression
 //!
 //! For the complete SQL function inventory and notes on result contracts, see `CATALOG.md` in the
-//! repository root.
+//! repository root. For small copy-paste query examples, see `EXERCISES.md`.
 
 pub mod error;
 pub mod functions;
