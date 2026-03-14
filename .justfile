@@ -25,13 +25,13 @@ test-integration test_name='':
 
 coverage:
     cargo llvm-cov clean --workspace
-    cargo llvm-cov --no-default-features --no-report
-    cargo llvm-cov report -vv --html --ignore-filename-regex "(examples).*" --output-dir coverage --open
+    cargo llvm-cov --no-default-features --lib --tests --no-report
+    cargo llvm-cov report -vv --html --ignore-filename-regex ".*/examples/.*" --output-dir coverage --open
 
 coverage-lcov:
     cargo llvm-cov clean --workspace
-    cargo llvm-cov --no-default-features --no-report
-    cargo llvm-cov report --lcov --ignore-filename-regex "(examples).*" --output-path lcov.info
+    cargo llvm-cov --no-default-features --lib --tests --no-report
+    cargo llvm-cov report --lcov --ignore-filename-regex ".*/examples/.*" --output-path lcov.info
 
 # --- EXAMPLES ---
 
