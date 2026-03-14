@@ -36,8 +36,9 @@ This folder contains the current, authoritative direction for `ndatafusion`.
 3. `docs/EXECUTION_TRACKER.md`: canonical `Done / Next / Needed` tracker for continuation.
 4. `docs/PUBLISH_CHECKLIST.md`: release gate, docs.rs posture, release-note minimums, and current
    publication blockers.
-5. `docs/ARCHITECTURE.md`: end-to-end implementation plan from scaffold to v1 publish.
-6. `docs/STATUS.md`: current repository snapshot and next required milestone.
+5. `CATALOG.md`: user-facing SQL catalog inventory, current notes, and roadmap status map.
+6. `docs/ARCHITECTURE.md`: end-to-end implementation plan from scaffold to v1 publish.
+7. `docs/STATUS.md`: current repository snapshot and next required milestone.
 
 ## Context Resume Protocol
 

@@ -14,6 +14,8 @@ Reason:
    58 and the released `nabled` / `ndarrow` contract.
 2. Until an Arrow-58-compatible DataFusion release exists on crates.io, `cargo publish` for
    `ndatafusion` remains intentionally blocked.
+3. Git tag and GitHub releases are still valid today; the blocker is specifically crates.io
+   publication.
 
 Use this checklist for release hardening now, and as the publish gate once the dependency blocker is
 removed.
@@ -46,7 +48,8 @@ Run these only once the DataFusion dependency blocker is removed:
 2. `cargo publish --dry-run --no-default-features`
 3. Confirm docs.rs posture still matches:
    - `package.metadata.docs.rs.no-default-features = true`
-   - crate-level docs still describe the constructor-backed `f64`-first contract accurately
+   - crate-level docs still describe the constructor-backed `Float32` / `Float64` real-valued
+     contract accurately
 
 ## Release Notes Minimum
 

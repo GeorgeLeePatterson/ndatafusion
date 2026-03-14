@@ -17,9 +17,10 @@ fn register_udfs(
     })
 }
 
-/// Register every currently enabled `ndatafusion` scalar UDF.
+/// Register the `ndatafusion` scalar UDF catalog in a `FunctionRegistry`.
 ///
-/// The initial scaffold exports an empty catalog and grows as domain slices land.
+/// This is the entry point for making the `ndatafusion` SQL functions available to a
+/// `SessionContext` or any other `DataFusion` function registry.
 ///
 /// # Errors
 ///

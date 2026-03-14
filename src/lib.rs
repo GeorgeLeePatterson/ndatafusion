@@ -1,12 +1,14 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-//! `ndatafusion` is a DataFusion-facing facade over `nabled`.
+//! `ndatafusion` provides linear algebra and machine learning UDFs for `DataFusion`.
 //!
-//! It owns `DataFusion` registration, SQL-facing numerical contracts, and constructor UDFs while
-//! delegating numerical semantics to `nabled`.
+//! Register the catalog with [`register_all`] and call the functions from SQL or by constructing
+//! expressions with helpers from [`functions`].
 //!
-//! The current public real-valued contract admits both `Float32` and `Float64` across the
-//! implemented catalog. SQL callers should construct canonical numerical values with the `make_*`
-//! UDF family and then pass those values into the linalg/ml catalog.
+//! The current catalog supports `Float32` and `Float64` across dense vector, dense matrix, sparse
+//! CSR, fixed-shape tensor, variable-shape tensor, and selected statistics and solver routines.
+//! Use the `make_*` constructor family when SQL starts from ordinary `List` values. If a table
+//! already stores canonical `FixedSizeList` or extension-backed Arrow values, call the numerical
+//! UDFs directly.
 //!
 //! # Quick Start
 //!
@@ -41,8 +43,9 @@
 //!
 //! # Constructors
 //!
-//! The constructor UDFs are the SQL ingress boundary from ordinary nested `List` values into the
-//! canonical Arrow contracts used by the numerical catalog:
+//! The constructor UDFs convert ordinary nested `List` values into the canonical Arrow contracts
+//! used by the numerical catalog. They are not required when input columns already use those
+//! canonical contracts:
 //!
 //! - `make_vector`
 //! - `make_matrix`
@@ -50,23 +53,23 @@
 //! - `make_variable_tensor`
 //! - `make_csr_matrix_batch`
 //!
-//! # Current Domain Coverage
+//! # Included UDF Groups
 //!
-//! The currently admitted real-valued catalog includes:
+//! The registered catalog includes:
 //!
-//! - dense vector row operations
-//! - dense matrix products, triangular solves, configurable and zero-config matrix functions,
-//!   decompositions, and summary statistics
-//! - sparse CSR batch products, direct solve, and transpose
-//! - fixed-shape tensor last-axis operations plus row-wise permutation / contraction, and
-//!   variable-shape tensor last-axis operations
-//! - dense iterative solvers plus linear regression and PCA fit / transform / inverse-transform
+//! - constructors for canonical numerical values
+//! - dense vector operations
+//! - dense matrix operations, decompositions, and direct solvers
+//! - sparse CSR operations
+//! - fixed-shape and variable-shape tensor operations
+//! - statistics, PCA, iterative solvers, and linear regression
 //!
-//! For project state, scope, and release posture, see the repository docs under `docs/`.
+//! For the complete SQL function inventory and notes on result contracts, see `CATALOG.md` in the
+//! repository root.
 
 pub mod error;
 pub mod functions;
-pub mod metadata;
+pub(crate) mod metadata;
 pub mod register;
 pub mod signatures;
 pub mod udf;

@@ -1,26 +1,40 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::types::Float64Type;
+use datafusion::arrow::array::types::{Float32Type, Float64Type};
 use datafusion::arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, Float64Array, Int64Array, ListArray, StructArray,
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, ListArray,
+    StructArray,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::common::utils::arrays_into_list_array;
 use datafusion::execution::FunctionRegistry;
 use datafusion::execution::registry::MemoryFunctionRegistry;
 use datafusion::prelude::SessionContext;
-use ndarray::{Ix1, Ix2, Ix3};
+use ndarray::{Array1, Array2, Array3, Ix1, Ix2, Ix3};
 
 fn assert_close(actual: f64, expected: f64) {
     let delta = (actual - expected).abs();
     assert!(delta < 1.0e-9, "expected {expected}, got {actual}, delta {delta}");
 }
 
+fn assert_close32(actual: f32, expected: f32) {
+    let delta = (actual - expected).abs();
+    assert!(delta < 1.0e-5, "expected {expected}, got {actual}, delta {delta}");
+}
+
 fn float64_list_array(rows: Vec<Vec<f64>>) -> ListArray {
     ListArray::from_iter_primitive::<Float64Type, _, _>(
         rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
+    )
+}
+
+fn float32_fixed_size_list_array(rows: Vec<Vec<f32>>) -> FixedSizeListArray {
+    let width = rows.first().map_or(0, Vec::len);
+    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+        rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
+        i32::try_from(width).expect("fixed-size-list width should fit i32"),
     )
 }
 
@@ -51,6 +65,14 @@ fn float64_column(batch: &RecordBatch, index: usize) -> &Float64Array {
         .as_any()
         .downcast_ref::<Float64Array>()
         .expect("expected Float64Array column")
+}
+
+fn float32_column(batch: &RecordBatch, index: usize) -> &Float32Array {
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .expect("expected Float32Array column")
 }
 
 fn int64_column(batch: &RecordBatch, index: usize) -> &Int64Array {
@@ -236,6 +258,174 @@ async fn sql_list_columns_drive_vector_and_matrix_queries() -> Result<()> {
     assert_close(float64_column(&batches[0], 1).value(1), 10.0);
     assert_close(float64_column(&batches[0], 2).value(0), -2.0);
     assert_close(float64_column(&batches[0], 2).value(1), 4.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_fixed_size_list_vector_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef),
+        (
+            "left_vector",
+            Arc::new(float32_fixed_size_list_array(vec![vec![3.0, 4.0], vec![6.0, 8.0]]))
+                as ArrayRef,
+        ),
+        (
+            "right_vector",
+            Arc::new(float32_fixed_size_list_array(vec![vec![4.0, 0.0], vec![0.0, 6.0]]))
+                as ArrayRef,
+        ),
+    ])?;
+    drop(ctx.register_batch("direct_vectors", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                vector_l2_norm(left_vector) AS norm,
+                vector_dot(left_vector, right_vector) AS dot,
+                vector_cosine_similarity(left_vector, right_vector) AS similarity
+             FROM direct_vectors
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+    assert_close32(float32_column(&batches[0], 1).value(0), 5.0);
+    assert_close32(float32_column(&batches[0], 1).value(1), 10.0);
+    assert_close32(float32_column(&batches[0], 2).value(0), 12.0);
+    assert_close32(float32_column(&batches[0], 2).value(1), 48.0);
+    assert_close32(float32_column(&batches[0], 3).value(0), 0.6);
+    assert_close32(float32_column(&batches[0], 3).value(1), 0.8);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_fixed_shape_tensor_matrix_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let matrices =
+        Array3::from_shape_vec((2, 2, 2), vec![1.0_f32, 2.0, 3.0, 4.0, 2.0, 0.0, 0.0, 2.0])
+            .expect("matrix batch");
+    let (matrix_field, matrix_storage) =
+        ndarrow::arrayd_to_fixed_shape_tensor("matrix", matrices.into_dyn())
+            .expect("fixed-shape matrix batch");
+    let rhs = float32_fixed_size_list_array(vec![vec![4.0, 3.0], vec![9.0, 8.0]]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        matrix_field,
+        Field::new("rhs", rhs.data_type().clone(), false),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(matrix_storage) as ArrayRef,
+        Arc::new(rhs) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("direct_matrices", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                matrix_determinant(matrix) AS det,
+                matrix_matvec(matrix, rhs) AS matvec
+             FROM direct_matrices
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+    assert_close32(float32_column(&batches[0], 1).value(0), -2.0);
+    assert_close32(float32_column(&batches[0], 1).value(1), 4.0);
+    let matvec = batches[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("matrix matvec output");
+    let matvec = ndarrow::fixed_size_list_as_array2::<Float32Type>(matvec).expect("matrix matvec");
+    assert_close32(matvec[[0, 0]], 10.0);
+    assert_close32(matvec[[0, 1]], 24.0);
+    assert_close32(matvec[[1, 0]], 18.0);
+    assert_close32(matvec[[1, 1]], 16.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_fixed_shape_tensor_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let tensors = Array3::from_shape_vec((1, 2, 3), vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .expect("tensor batch");
+    let (tensor_field, tensor_storage) =
+        ndarrow::arrayd_to_fixed_shape_tensor("tensor", tensors.into_dyn())
+            .expect("fixed-shape tensor batch");
+    let schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false), tensor_field]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(tensor_storage) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("direct_tensors", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                tensor_sum_last_axis(tensor) AS reduced,
+                tensor_permute_axes(tensor, 1, 0) AS permuted
+             FROM direct_tensors",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_eq!(int64_column(&batches[0], 0).value(0), 1);
+
+    let schema = batches[0].schema();
+    let reduced_storage = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("reduced tensor output");
+    let reduced =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(schema.field(1), reduced_storage)
+            .expect("reduced tensor")
+            .into_dimensionality::<Ix2>()
+            .expect("rank-2 reduced tensor");
+    assert_close32(reduced[[0, 0]], 6.0);
+    assert_close32(reduced[[0, 1]], 15.0);
+
+    let permuted_storage = batches[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("permuted tensor output");
+    let permuted = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+        schema.field(2),
+        permuted_storage,
+    )
+    .expect("permuted tensor")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 permuted tensor");
+    assert_close32(permuted[[0, 0, 0]], 1.0);
+    assert_close32(permuted[[0, 0, 1]], 4.0);
+    assert_close32(permuted[[0, 2, 0]], 3.0);
+    assert_close32(permuted[[0, 2, 1]], 6.0);
     Ok(())
 }
 
@@ -937,6 +1127,212 @@ async fn sql_sparse_and_variable_tensor_pipeline_executes() -> Result<()> {
     assert_close(first_vector[[1]], 6.0);
     assert_close(second_vector[[0]], 8.0);
     assert_close(second_vector[[1]], 16.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_variable_shape_tensor_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let (tensor_field, tensor_storage) = ndarrow::arrays_to_variable_shape_tensor(
+        "tensor",
+        vec![
+            Array2::from_shape_vec((2, 3), vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0])
+                .expect("row 0 tensor")
+                .into_dyn(),
+            Array2::from_shape_vec((1, 3), vec![7.0_f32, 8.0, 9.0])
+                .expect("row 1 tensor")
+                .into_dyn(),
+        ],
+        Some(vec![None, Some(3)]),
+    )
+    .expect("variable tensor batch");
+    let schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false), tensor_field]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(tensor_storage) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("direct_variable_tensors", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                tensor_variable_sum_last_axis(tensor) AS reduced,
+                tensor_variable_l2_norm_last_axis(tensor) AS norms
+             FROM direct_variable_tensors
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+
+    let schema = batches[0].schema();
+    let mut reduced_rows = ndarrow::variable_shape_tensor_iter::<Float32Type>(
+        schema.field(1),
+        struct_column(&batches[0], 1),
+    )
+    .expect("reduced variable tensor");
+    let (_, first_reduced) = reduced_rows.next().expect("row 0 reduced").expect("row 0 reduced");
+    let first_reduced = first_reduced.into_dimensionality::<Ix1>().expect("rank-1 reduced");
+    let (_, second_reduced) = reduced_rows.next().expect("row 1 reduced").expect("row 1 reduced");
+    let second_reduced = second_reduced.into_dimensionality::<Ix1>().expect("rank-1 reduced");
+    assert_close32(first_reduced[[0]], 6.0);
+    assert_close32(first_reduced[[1]], 15.0);
+    assert_close32(second_reduced[[0]], 24.0);
+
+    let mut norm_rows = ndarrow::variable_shape_tensor_iter::<Float32Type>(
+        schema.field(2),
+        struct_column(&batches[0], 2),
+    )
+    .expect("norm variable tensor");
+    let (_, first_norms) = norm_rows.next().expect("row 0 norms").expect("row 0 norms");
+    let first_norms = first_norms.into_dimensionality::<Ix1>().expect("rank-1 norms");
+    let (_, second_norms) = norm_rows.next().expect("row 1 norms").expect("row 1 norms");
+    let second_norms = second_norms.into_dimensionality::<Ix1>().expect("rank-1 norms");
+    assert_close32(first_norms[[0]], 14.0_f32.sqrt());
+    assert_close32(first_norms[[1]], 77.0_f32.sqrt());
+    assert_close32(second_norms[[0]], 194.0_f32.sqrt());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_sparse_extension_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let (matrix_field, matrices) = ndarrow::csr_batch_to_extension_array(
+        "matrix",
+        vec![[2, 3], [2, 2]],
+        vec![vec![0, 2, 3], vec![0, 1, 3]],
+        vec![vec![0, 2, 1], vec![0, 0, 1]],
+        vec![vec![1.0_f32, 2.0, 3.0], vec![4.0, 5.0, 6.0]],
+    )
+    .expect("sparse matrix batch");
+    let (vector_field, vectors) = ndarrow::arrays_to_variable_shape_tensor(
+        "vector",
+        vec![
+            Array1::from_vec(vec![1.0_f32, 2.0, 3.0]).into_dyn(),
+            Array1::from_vec(vec![2.0_f32, 1.0]).into_dyn(),
+        ],
+        Some(vec![None]),
+    )
+    .expect("sparse rhs batch");
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        matrix_field,
+        vector_field,
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(matrices) as ArrayRef,
+        Arc::new(vectors) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("direct_sparse_inputs", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                sparse_matvec(matrix, vector) AS result
+             FROM direct_sparse_inputs
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+
+    let schema = batches[0].schema();
+    let mut result_rows = ndarrow::variable_shape_tensor_iter::<Float32Type>(
+        schema.field(1),
+        struct_column(&batches[0], 1),
+    )
+    .expect("sparse matvec output");
+    let (_, first) = result_rows.next().expect("row 0 result").expect("row 0 result");
+    let first = first.into_dimensionality::<Ix1>().expect("rank-1 result");
+    let (_, second) = result_rows.next().expect("row 1 result").expect("row 1 result");
+    let second = second.into_dimensionality::<Ix1>().expect("rank-1 result");
+    assert_close32(first[[0]], 7.0);
+    assert_close32(first[[1]], 6.0);
+    assert_close32(second[[0]], 8.0);
+    assert_close32(second[[1]], 16.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_sparse_lu_solve_executes() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let (matrix_field, matrices) = ndarrow::csr_batch_to_extension_array(
+        "matrix",
+        vec![[2, 2], [2, 2]],
+        vec![vec![0, 2, 4], vec![0, 1, 2]],
+        vec![vec![0, 1, 0, 1], vec![0, 1]],
+        vec![vec![4.0_f32, 1.0, 1.0, 3.0], vec![2.0, 5.0]],
+    )
+    .expect("sparse lu matrix batch");
+    let (rhs_field, rhs) = ndarrow::arrays_to_variable_shape_tensor(
+        "rhs",
+        vec![
+            Array1::from_vec(vec![1.0_f32, 2.0]).into_dyn(),
+            Array1::from_vec(vec![4.0_f32, 10.0]).into_dyn(),
+        ],
+        Some(vec![None]),
+    )
+    .expect("sparse lu rhs batch");
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        matrix_field,
+        rhs_field,
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(matrices) as ArrayRef,
+        Arc::new(rhs) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("direct_sparse_solve_inputs", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                sparse_lu_solve(matrix, rhs) AS solved
+             FROM direct_sparse_solve_inputs
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+
+    let schema = batches[0].schema();
+    let mut solved_rows = ndarrow::variable_shape_tensor_iter::<Float32Type>(
+        schema.field(1),
+        struct_column(&batches[0], 1),
+    )
+    .expect("sparse lu output");
+    let (_, first) = solved_rows.next().expect("row 0 solved").expect("row 0 solved");
+    let first = first.into_dimensionality::<Ix1>().expect("rank-1 solved");
+    let (_, second) = solved_rows.next().expect("row 1 solved").expect("row 1 solved");
+    let second = second.into_dimensionality::<Ix1>().expect("rank-1 solved");
+    assert_close32(first[[0]], 1.0 / 11.0);
+    assert_close32(first[[1]], 7.0 / 11.0);
+    assert_close32(second[[0]], 2.0);
+    assert_close32(second[[1]], 2.0);
     Ok(())
 }
 

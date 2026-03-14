@@ -16,10 +16,10 @@ test:
     RUST_LOG={{ LOG }} cargo test --no-default-features --test "e2e" -- --nocapture --show-output
 
 test-one test_name:
-    RUST_LOG={{ LOG }} cargo test "{{ test_name }}" -- --nocapture --show-output
+    RUST_LOG={{ LOG }} cargo test --no-default-features "{{ test_name }}" -- --nocapture --show-output
 
 test-integration test_name='':
-    RUST_LOG={{ LOG }} cargo test --test "e2e" "{{ test_name }}" -- --nocapture --show-output
+    RUST_LOG={{ LOG }} cargo test --no-default-features --test "e2e" "{{ test_name }}" -- --nocapture --show-output
 
 # --- COVERAGE ---
 
@@ -41,15 +41,15 @@ example example:
 # --- DOCS ---
 
 docs:
-    cargo doc --open
+    cargo doc --no-default-features --no-deps --open
 
 # --- MAINTENANCE ---
 
 fmt:
-    cargo +nightly fmt -- --config-path ./rustfmt.toml
+    cargo +nightly fmt --all -- --config-path ./rustfmt.toml
 
 fmt-check:
-    cargo +nightly fmt --check -- --config-path ./rustfmt.toml
+    cargo +nightly fmt --all -- --check --config-path ./rustfmt.toml
 
 # Run checks CI will
 checks:
@@ -78,12 +78,13 @@ init-dev:
     @echo "✅ Development tools installed!"
     @echo ""
     @echo "Next steps:"
-    @echo "1. Get your crates.io API token from https://crates.io/settings/tokens"
-    @echo "2. Add it as CARGO_REGISTRY_TOKEN in GitHub repo settings → Secrets"
-    @echo "3. Use 'cargo release patch/minor/major' to create releases"
+    @echo "1. Use 'just prepare-release X.Y.Z' to create a release branch and notes"
+    @echo "2. Merge the release PR"
+    @echo "3. Use 'just tag-release X.Y.Z' to push the tag and trigger the GitHub release workflow"
+    @echo "4. Only add a crates.io token after the DataFusion publish blocker is removed"
     @echo ""
     @echo "Useful commands:"
-    @echo "  just release-dry patch  # Preview what would happen"
+    @echo "  just release-dry 0.1.0  # Preview what would happen"
     @echo "  just check-outdated     # Check for outdated dependencies"
     @echo "  just audit              # Security audit"
 
@@ -106,29 +107,14 @@ prepare-release version:
         exit 1
     fi
 
-    # Parse version components
-    IFS='.' read -r MAJOR MINOR PATCH <<< "{{ version }}"
-
     # Get current version for release notes
     CURRENT_VERSION=$(grep -E '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
 
     # Create release branch
     git checkout -b "release-v{{ version }}"
 
-    # Update version in root Cargo.toml (in [package] section)
-    # This uses a more specific pattern to only match the version under [package]
+    # Update version in root Cargo.toml (in [package] section only)
     awk '/^\[package\]/ {in_package=1} in_package && /^version = / {gsub(/"[^"]*"/, "\"{{ version }}\""); in_package=0} {print}' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
-
-    # Update gravel version references in README files (if they exist)
-    # Look for patterns like: gravel = "0.1.1" or gravel = { version = "0.1.1"
-    for readme in README.md; do
-        if [ -f "$readme" ]; then
-            # Update simple dependency format
-            sed -i '' "s/ndatafusion = \"[0-9]*\.[0-9]*\.[0-9]*\"/ndatafusion = \"{{ version }}\"/" "$readme" || true
-            # Update version field in dependency table format
-            sed -i '' "s/ndatafusion = { version = \"[0-9]*\.[0-9]*\.[0-9]*\"/ndatafusion = { version = \"{{ version }}\"/" "$readme" || true
-        fi
-    done
 
     # Update Cargo.lock
     cargo update --workspace
@@ -143,9 +129,6 @@ prepare-release version:
 
     # Stage all changes
     git add Cargo.toml Cargo.lock CHANGELOG.md RELEASE_NOTES.md
-    # Also add README files if they were modified
-    git add README.md 2>/dev/null || true
-
     # Commit
     git commit -m "chore: prepare release v{{ version }}"
 
@@ -182,30 +165,27 @@ tag-release version:
         exit 1
     fi
 
-    # Verify publish will work
-    cargo publish --dry-run -p ndatafusion --no-verify
-
     # Create and push tag
     git tag -a "v{{ version }}" -m "Release v{{ version }}"
     git push origin "v{{ version }}"
 
     echo ""
     echo "✅ Tag v{{ version }} created and pushed!"
-    echo "The release workflow will now run automatically."
+    echo "The GitHub release workflow will now run automatically."
+    echo "Note: crates.io publication remains blocked until the DataFusion git dependency is removed."
     echo ""
 
 # Preview what a release would do (dry run)
 release-dry version:
     @echo "This would:"
     @echo "1. Create branch: release-v{{ version }}"
-    @echo "2. Update version to {{ version }} in:"
-    @echo "   - Cargo.toml (workspace.package section only)"
-    @echo "   - README files (if they contain gravel version references)"
-    @echo "3. Update Cargo.lock (usually done automatically with Cargo.toml change)"
+    @echo "2. Update version to {{ version }} in Cargo.toml ([package] section only)"
+    @echo "3. Update Cargo.lock"
     @echo "4. Generate CHANGELOG.md"
     @echo "5. Generate RELEASE_NOTES.md"
     @echo "6. Create commit and push branch"
     @echo ""
     @echo "After PR merge, 'just tag-release {{ version }}' would:"
     @echo "1. Tag the merged commit as v{{ version }}"
-    @echo "2. Push the tag (triggering release workflow)"
+    @echo "2. Push the tag (triggering the GitHub release workflow)"
+    @echo "3. Not attempt crates.io publication while the DataFusion git dependency remains"

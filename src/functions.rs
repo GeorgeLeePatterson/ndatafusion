@@ -1,6 +1,10 @@
-//! Direct Rust call sites layered over the registered UDF catalog.
+//! Expression builders for the `ndatafusion` UDF catalog.
 //!
-//! Domain-specific helpers land here as the first concrete UDF slices are implemented.
+//! Each function in this module returns a `datafusion::logical_expr::Expr` that calls a registered
+//! `ndatafusion` scalar UDF. The helper names match the SQL function names.
+//!
+//! For the complete catalog and notes on input and output contracts, see `CATALOG.md` in the
+//! repository root.
 
 use datafusion::logical_expr::Expr;
 

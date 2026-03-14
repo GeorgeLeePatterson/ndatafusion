@@ -1,40 +1,27 @@
-# ndatafusion
+# 🪐 ndatafusion
 
-`ndatafusion` is a DataFusion-facing facade over `nabled`.
+`ndatafusion` is a DataFusion extension providing `nabled` powered linear algebra and ML UDFs.
 
-Current baseline:
-
-1. DataFusion is pinned to an Arrow-58-compatible git revision.
-2. Published `nabled 0.0.7` and `ndarrow 0.0.3` are now wired in.
-3. `ndatafusion` mirrors `nabled`'s public feature flags one-for-one.
-4. The initial extension-crate surface exists via `register_all`, `functions`, and `udfs`.
-5. The first numerical UDF catalog now exists.
-
-## Use Today
+# Install
 
 ```toml
 [dependencies]
-ndatafusion = { git = "https://github.com/georgeleepatterson/ndatafusion", features = ["openblas-system"] }
+ndatafusion = { version = "0.0.1", features = ["openblas-system"] }
 ```
-
-`ndatafusion` is not published yet. The crate still depends on DataFusion from a pinned git
-revision because the latest published DataFusion release does not yet match the Arrow 58 contract
-required by `nabled`.
 
 `nabled/arrow` is part of the base `ndatafusion` contract and is enabled unconditionally.
 
 Feature forwarding follows `nabled` directly:
 
-1. `test-utils`
-2. `blas`
-3. `lapack-provider`
-4. `openblas-system`
-5. `openblas-static`
-6. `netlib-system`
-7. `netlib-static`
-8. `magma-system`
-9. `accelerator-rayon`
-10. `accelerator-wgpu`
+* `blas`
+* `lapack-provider`
+* `openblas-system`
+* `openblas-static`
+* `netlib-system`
+* `netlib-static`
+* `magma-system`
+* `accelerator-rayon`
+* `accelerator-wgpu`
 
 ## Quick Start
 
@@ -67,8 +54,10 @@ async fn main() -> datafusion::common::Result<()> {
 }
 ```
 
-The `make_*` constructors are the SQL ingress boundary from ordinary nested `List` values into the
-canonical numerical contracts used by the linalg/ml UDFs:
+The `make_*` constructors convert ordinary nested `List` values into the canonical numerical
+contracts used by the linalg/ml UDFs. They are not required when input columns already use the
+expected Arrow contract, such as `FixedSizeList<Float32|Float64>(D)` for dense vectors or the
+extension-backed matrix, tensor, and sparse batch layouts emitted by `ndarrow`:
 
 1. `make_vector`
 2. `make_matrix`
@@ -78,8 +67,9 @@ canonical numerical contracts used by the linalg/ml UDFs:
 
 ## Status
 
-The current implementation is no longer scaffold-only. `ndatafusion` now registers a substantial
-direct batch-native catalog across 78 scalar UDFs:
+For the user-facing SQL catalog, see [CATALOG.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/CATALOG.md).
+
+`ndatafusion` registers a direct batch-native catalog across 78 scalar UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
@@ -100,8 +90,7 @@ direct batch-native catalog across 78 scalar UDFs:
    and linear regression
 9. sparse direct solve via `sparse_lu_solve`
 
-The current admitted real-valued surface supports `Float32` and `Float64` across the implemented
-catalog. The crate also has end-to-end SQL integration coverage for:
+The current surface supports `Float32` and `Float64` across the implemented catalog. The crate also has end-to-end SQL integration coverage for:
 
 1. literal-backed constructor pipelines
 2. list-column-backed vector and matrix queries
@@ -114,9 +103,6 @@ catalog. The crate also has end-to-end SQL integration coverage for:
 9. fixed-shape tensor constructor plus reduction pipelines
 10. fixed-shape tensor axis permutation / contraction queries
 
-The current non-controversial, SQL-natural, real-valued catalog is now implemented for the
-constructor-backed surface. Remaining implementation work has moved to the controversial or
-post-v1 bucket, such as complex-valued result contracts, callback-driven differentiation, richer
-planner/UDAF/table-function surfaces, and stateful factorization reuse. Actual crates.io
-publication remains blocked until `ndatafusion` can depend on a published Arrow-58-compatible
-DataFusion release instead of the current git revision.
+## License
+
+Apache License, Version 2.0
