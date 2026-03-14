@@ -7,13 +7,15 @@ pub use crate::udf::constructors::{
     make_vector_udf,
 };
 pub use crate::udf::decomposition::{
-    matrix_cholesky_inverse_udf, matrix_cholesky_udf, matrix_determinant_udf,
-    matrix_eigen_generalized_udf, matrix_eigen_symmetric_udf, matrix_gram_schmidt_classic_udf,
-    matrix_gram_schmidt_udf, matrix_inverse_udf, matrix_log_determinant_udf, matrix_lu_udf,
-    matrix_polar_udf, matrix_qr_condition_number_udf, matrix_qr_pivoted_udf, matrix_qr_reduced_udf,
+    matrix_balance_nonsymmetric_udf, matrix_cholesky_inverse_udf, matrix_cholesky_udf,
+    matrix_determinant_udf, matrix_eigen_generalized_udf, matrix_eigen_symmetric_udf,
+    matrix_gram_schmidt_classic_udf, matrix_gram_schmidt_udf, matrix_inverse_udf,
+    matrix_log_determinant_udf, matrix_lu_udf, matrix_polar_udf, matrix_qr_condition_number_udf,
+    matrix_qr_pivoted_udf, matrix_qr_reconstruct_udf, matrix_qr_reduced_udf,
     matrix_qr_solve_least_squares_udf, matrix_qr_udf, matrix_schur_udf,
     matrix_svd_condition_number_udf, matrix_svd_null_space_udf, matrix_svd_pseudo_inverse_udf,
-    matrix_svd_rank_udf, matrix_svd_truncated_udf, matrix_svd_udf, matrix_svd_with_tolerance_udf,
+    matrix_svd_rank_udf, matrix_svd_reconstruct_udf, matrix_svd_truncated_udf, matrix_svd_udf,
+    matrix_svd_with_tolerance_udf,
 };
 pub use crate::udf::iterative::{matrix_conjugate_gradient_udf, matrix_gmres_udf};
 pub use crate::udf::matrix::{
@@ -75,6 +77,7 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_qr_pivoted_udf(),
         matrix_qr_solve_least_squares_udf(),
         matrix_qr_condition_number_udf(),
+        matrix_qr_reconstruct_udf(),
         matrix_svd_udf(),
         matrix_svd_truncated_udf(),
         matrix_svd_with_tolerance_udf(),
@@ -82,8 +85,10 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_svd_pseudo_inverse_udf(),
         matrix_svd_condition_number_udf(),
         matrix_svd_rank_udf(),
+        matrix_svd_reconstruct_udf(),
         matrix_eigen_symmetric_udf(),
         matrix_eigen_generalized_udf(),
+        matrix_balance_nonsymmetric_udf(),
         matrix_schur_udf(),
         matrix_polar_udf(),
         matrix_gram_schmidt_udf(),
@@ -131,6 +136,6 @@ mod tests {
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
-        assert_eq!(all_default_functions().len(), 72);
+        assert_eq!(all_default_functions().len(), 75);
     }
 }

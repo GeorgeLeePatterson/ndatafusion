@@ -384,6 +384,31 @@ fn assert_orthogonal_matrix_output(return_field: &FieldRef, output: &ColumnarVal
     assert_close(orthogonal[[0, 1, 1]], 1.0);
 }
 
+fn assert_tensor_vector_struct_output(
+    return_field: &FieldRef,
+    output: &ColumnarValue,
+    diagonal: [f64; 2],
+) {
+    let DataType::Struct(fields) = return_field.data_type() else {
+        panic!("expected tensor-vector struct return");
+    };
+    let output = struct_array(output);
+    let balanced =
+        output.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("balanced tensor");
+    let balanced = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[0], balanced)
+        .expect("balanced tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 balanced tensor");
+    let scaling =
+        output.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("diagonal vector");
+    let scaling =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(scaling).expect("diagonal vector");
+    assert_close(balanced[[0, 0, 0]], diagonal[0]);
+    assert_close(balanced[[0, 1, 1]], diagonal[1]);
+    assert_close(scaling[[0, 0]], 1.0);
+    assert_close(scaling[[0, 1]], 1.0);
+}
+
 #[test]
 fn constructor_udfs_build_fixed_shape_contracts() {
     let make_vector_udf = udfs::make_vector_udf();
@@ -1389,7 +1414,11 @@ fn matrix_svd_variant_udfs_validate_scalar_contracts() {
 fn matrix_decomposition_variant_udfs_cover_float32_branches() {
     let (qr_field, qr_matrices) =
         matrix_batch_f32("qr_rect", [[[1.0, 0.0], [0.0, 2.0], [0.0, 0.0]]]);
-    for udf in [udfs::matrix_qr_reduced_udf(), udfs::matrix_qr_pivoted_udf()] {
+    for udf in [
+        udfs::matrix_qr_reduced_udf(),
+        udfs::matrix_qr_pivoted_udf(),
+        udfs::matrix_qr_reconstruct_udf(),
+    ] {
         let (field, output) = invoke_udf(
             &udf,
             vec![ColumnarValue::Array(Arc::new(qr_matrices.clone()))],
@@ -1477,6 +1506,16 @@ fn matrix_spectral_and_orthogonalization_udfs_cover_outputs() {
     .expect("matrix_eigen_generalized");
     assert_eigen_struct_output(&generalized_return_field, &generalized_output, 4.0, 9.0);
 
+    let (balanced_return_field, balanced_output) = invoke_udf(
+        &udfs::matrix_balance_nonsymmetric_udf(),
+        vec![ColumnarValue::Array(Arc::new(spectral_matrices.clone()))],
+        vec![Arc::clone(&spectral_field)],
+        &[None],
+        1,
+    )
+    .expect("matrix_balance_nonsymmetric");
+    assert_tensor_vector_struct_output(&balanced_return_field, &balanced_output, [4.0, 9.0]);
+
     let (schur_return_field, schur_output) = invoke_udf(
         &udfs::matrix_schur_udf(),
         vec![ColumnarValue::Array(Arc::new(spectral_matrices.clone()))],
@@ -1519,6 +1558,7 @@ fn matrix_spectral_and_orthogonalization_udfs_cover_float32_branches() {
 
     for udf in [
         udfs::matrix_eigen_symmetric_udf(),
+        udfs::matrix_balance_nonsymmetric_udf(),
         udfs::matrix_schur_udf(),
         udfs::matrix_polar_udf(),
         udfs::matrix_gram_schmidt_udf(),
@@ -1552,9 +1592,12 @@ fn matrix_spectral_and_orthogonalization_udfs_cover_float32_branches() {
 #[test]
 fn matrix_spectral_udfs_validate_square_and_pair_contracts() {
     let (rect_field, rect_matrices) = matrix_batch("rect", [[[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]]);
-    for udf in
-        [udfs::matrix_eigen_symmetric_udf(), udfs::matrix_schur_udf(), udfs::matrix_polar_udf()]
-    {
+    for udf in [
+        udfs::matrix_eigen_symmetric_udf(),
+        udfs::matrix_balance_nonsymmetric_udf(),
+        udfs::matrix_schur_udf(),
+        udfs::matrix_polar_udf(),
+    ] {
         let error = invoke_udf_error(
             &udf,
             vec![ColumnarValue::Array(Arc::new(rect_matrices.clone()))],
@@ -1595,12 +1638,10 @@ fn matrix_spectral_udfs_validate_square_and_pair_contracts() {
 }
 
 #[test]
-fn matrix_qr_and_svd_helper_udfs_cover_solver_scalar_and_inverse_outputs() {
+fn matrix_qr_helper_udfs_cover_solver_scalar_and_reconstruction_outputs() {
     let qr_solve_udf = udfs::matrix_qr_solve_least_squares_udf();
     let qr_condition_udf = udfs::matrix_qr_condition_number_udf();
-    let svd_pseudo_inverse_udf = udfs::matrix_svd_pseudo_inverse_udf();
-    let svd_condition_udf = udfs::matrix_svd_condition_number_udf();
-    let svd_rank_udf = udfs::matrix_svd_rank_udf();
+    let qr_reconstruct_udf = udfs::matrix_qr_reconstruct_udf();
 
     let (qr_field, qr_matrices) =
         matrix_batch("qr", [[[2.0, 0.0], [0.0, 1.0]], [[3.0, 0.0], [0.0, 4.0]]]);
@@ -1627,8 +1668,8 @@ fn matrix_qr_and_svd_helper_udfs_cover_solver_scalar_and_inverse_outputs() {
 
     let (_, qr_condition) = invoke_udf(
         &qr_condition_udf,
-        vec![ColumnarValue::Array(Arc::new(qr_matrices))],
-        vec![qr_field],
+        vec![ColumnarValue::Array(Arc::new(qr_matrices.clone()))],
+        vec![Arc::clone(&qr_field)],
         &[None],
         2,
     )
@@ -1636,6 +1677,27 @@ fn matrix_qr_and_svd_helper_udfs_cover_solver_scalar_and_inverse_outputs() {
     assert_close(f64_array(&qr_condition).value(0), 2.0);
     assert_close(f64_array(&qr_condition).value(1), 4.0 / 3.0);
 
+    let (qr_reconstruct_field, qr_reconstructed) = invoke_udf(
+        &qr_reconstruct_udf,
+        vec![ColumnarValue::Array(Arc::new(qr_matrices))],
+        vec![qr_field],
+        &[None],
+        2,
+    )
+    .expect("matrix_qr_reconstruct");
+    let qr_reconstructed = fixed_shape_view3(&qr_reconstruct_field, &qr_reconstructed);
+    assert_close(qr_reconstructed[[0, 0, 0]], 2.0);
+    assert_close(qr_reconstructed[[0, 1, 1]], 1.0);
+    assert_close(qr_reconstructed[[1, 0, 0]], 3.0);
+    assert_close(qr_reconstructed[[1, 1, 1]], 4.0);
+}
+
+#[test]
+fn matrix_svd_helper_udfs_cover_inverse_scalar_rank_and_reconstruction_outputs() {
+    let svd_pseudo_inverse_udf = udfs::matrix_svd_pseudo_inverse_udf();
+    let svd_condition_udf = udfs::matrix_svd_condition_number_udf();
+    let svd_rank_udf = udfs::matrix_svd_rank_udf();
+    let svd_reconstruct_udf = udfs::matrix_svd_reconstruct_udf();
     let (svd_field, svd_matrices) =
         matrix_batch("svd", [[[4.0, 0.0], [0.0, 2.0]], [[9.0, 0.0], [0.0, 3.0]]]);
     let (pseudo_inverse_field, pseudo_inverse) = invoke_udf(
@@ -1662,6 +1724,20 @@ fn matrix_qr_and_svd_helper_udfs_cover_solver_scalar_and_inverse_outputs() {
     .expect("matrix_svd_condition_number");
     assert_close(f64_array(&svd_condition).value(0), 2.0);
     assert_close(f64_array(&svd_condition).value(1), 3.0);
+
+    let (svd_reconstruct_field, svd_reconstructed) = invoke_udf(
+        &svd_reconstruct_udf,
+        vec![ColumnarValue::Array(Arc::new(svd_matrices.clone()))],
+        vec![Arc::clone(&svd_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_svd_reconstruct");
+    let svd_reconstructed = fixed_shape_view3(&svd_reconstruct_field, &svd_reconstructed);
+    assert_close(svd_reconstructed[[0, 0, 0]], 4.0);
+    assert_close(svd_reconstructed[[0, 1, 1]], 2.0);
+    assert_close(svd_reconstructed[[1, 0, 0]], 9.0);
+    assert_close(svd_reconstructed[[1, 1, 1]], 3.0);
 
     let (rank_field, rank_matrices) =
         matrix_batch("rank", [[[1.0, 0.0], [0.0, 1.0]], [[1.0, 1.0], [1.0, 1.0]]]);
@@ -3438,9 +3514,11 @@ fn matrix_and_decomposition_udfs_cover_float32_branches() {
         udfs::matrix_qr_udf(),
         udfs::matrix_svd_udf(),
         udfs::matrix_qr_condition_number_udf(),
+        udfs::matrix_qr_reconstruct_udf(),
         udfs::matrix_svd_pseudo_inverse_udf(),
         udfs::matrix_svd_condition_number_udf(),
         udfs::matrix_svd_rank_udf(),
+        udfs::matrix_svd_reconstruct_udf(),
     ] {
         let (_field, output) = invoke_udf(
             &udf,

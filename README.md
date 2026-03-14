@@ -79,7 +79,7 @@ canonical numerical contracts used by the linalg/ml UDFs:
 ## Status
 
 The current implementation is no longer scaffold-only. `ndatafusion` now registers a substantial
-direct batch-native catalog across 72 scalar UDFs:
+direct batch-native catalog across 75 scalar UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
@@ -88,8 +88,9 @@ direct batch-native catalog across 72 scalar UDFs:
    LU/Cholesky/QR least-squares solves
 4. struct-valued LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD,
    tolerance-thresholded SVD, symmetric/generalized eigen, Schur, polar, and PCA workflows
-5. matrix inverse, determinant, log-determinant, QR condition number, SVD null-space,
-   pseudo-inverse / condition number / rank, Gram-Schmidt variants, zero-config matrix functions
+5. matrix inverse, determinant, log-determinant, QR condition number / reconstruction,
+   SVD null-space / pseudo-inverse / condition number / rank / reconstruction,
+   non-symmetric matrix balancing, Gram-Schmidt variants, zero-config matrix functions
    (`matrix_exp_eigen`, `matrix_log_eigen`, `matrix_log_svd`, `matrix_sign`), and configurable
    matrix functions (`matrix_exp`, `matrix_log_taylor`, `matrix_power`)
 6. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat

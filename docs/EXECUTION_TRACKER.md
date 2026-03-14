@@ -177,6 +177,20 @@ order:
     - the current catalog now exposes 72 registered scalar UDFs
     - direct unit coverage, float32 branch coverage, contract-edge validation, and constructor-
       backed SQL integration coverage now exercise the new tensor-axis slice
+22. `D-022`: `N-010` has advanced again on decomposition-helper parity:
+    - `matrix_qr_reconstruct` now exists over canonical matrix batches as a direct real-valued
+      reconstruction helper
+    - `matrix_svd_reconstruct` now exists over canonical matrix batches as a direct real-valued
+      reconstruction helper
+    - the current catalog now exposes 74 registered scalar UDFs
+    - direct unit coverage, float32 branch coverage, and constructor-backed SQL integration
+      coverage now exercise the reconstruction helper slice
+23. `D-023`: `N-010` has advanced again on real-valued spectral-helper parity:
+    - `matrix_balance_nonsymmetric` now exists over canonical square matrix batches with a struct
+      result contract for the balanced matrix plus balancing diagonal
+    - the current catalog now exposes 75 registered scalar UDFs
+    - direct unit coverage, float32 branch coverage, square-contract validation, and
+      constructor-backed SQL integration coverage now exercise the balancing helper slice
 
 ## Next
 

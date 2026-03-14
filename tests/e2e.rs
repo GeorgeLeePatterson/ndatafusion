@@ -133,6 +133,28 @@ fn assert_orthogonal_matrix_column(batch: &RecordBatch, index: usize) {
     assert_close(output[[0, 1, 1]], 1.0);
 }
 
+fn assert_tensor_vector_struct_column(batch: &RecordBatch, index: usize, diagonal: [f64; 2]) {
+    let field = batch.schema().field(index).clone();
+    let DataType::Struct(fields) = field.data_type() else {
+        panic!("expected tensor-vector struct output");
+    };
+    let output = struct_column(batch, index);
+    let balanced =
+        output.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("balanced tensor");
+    let balanced = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[0], balanced)
+        .expect("balanced tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 balanced tensor");
+    let scaling =
+        output.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("diagonal vector");
+    let scaling =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(scaling).expect("diagonal vector");
+    assert_close(balanced[[0, 0, 0]], diagonal[0]);
+    assert_close(balanced[[0, 1, 1]], diagonal[1]);
+    assert_close(scaling[[0, 0]], 1.0);
+    assert_close(scaling[[0, 1]], 1.0);
+}
+
 #[test]
 fn register_all_accepts_the_current_catalog() {
     let mut registry = MemoryFunctionRegistry::new();
@@ -252,7 +274,9 @@ async fn sql_matrix_helper_queries_execute() -> Result<()> {
                 matrix_matvec(make_matrix(matrix_values, 2, 2), make_vector(vector_values, 2)) AS \
              product,
                 matrix_qr_condition_number(make_matrix(matrix_values, 2, 2)) AS qr_cond,
-                matrix_svd_rank(make_matrix(rank_matrix_values, 2, 2)) AS svd_rank
+                matrix_qr_reconstruct(make_matrix(matrix_values, 2, 2)) AS qr_reconstructed,
+                matrix_svd_rank(make_matrix(rank_matrix_values, 2, 2)) AS svd_rank,
+                matrix_svd_reconstruct(make_matrix(matrix_values, 2, 2)) AS svd_reconstructed
              FROM matrix_helpers
              ORDER BY id",
         )
@@ -276,7 +300,42 @@ async fn sql_matrix_helper_queries_execute() -> Result<()> {
     assert_close(product[[1, 1]], 32.0);
     assert_close(float64_column(&batches[0], 2).value(0), 2.0);
     assert_close(float64_column(&batches[0], 2).value(1), 4.0 / 3.0);
-    assert_eq!(int64_column(&batches[0], 3).values().as_ref(), &[2, 1]);
+
+    let schema = batches[0].schema();
+
+    let qr_field = schema.field(3);
+    let qr_reconstructed = batches[0]
+        .column(3)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("qr reconstructed tensor output");
+    let qr_reconstructed =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(qr_field, qr_reconstructed)
+            .expect("qr reconstructed tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 qr reconstructed tensor");
+    assert_close(qr_reconstructed[[0, 0, 0]], 2.0);
+    assert_close(qr_reconstructed[[0, 1, 1]], 1.0);
+    assert_close(qr_reconstructed[[1, 0, 0]], 3.0);
+    assert_close(qr_reconstructed[[1, 1, 1]], 4.0);
+
+    assert_eq!(int64_column(&batches[0], 4).values().as_ref(), &[2, 1]);
+
+    let svd_field = schema.field(5);
+    let svd_reconstructed = batches[0]
+        .column(5)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("svd reconstructed tensor output");
+    let svd_reconstructed =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(svd_field, svd_reconstructed)
+            .expect("svd reconstructed tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 svd reconstructed tensor");
+    assert_close(svd_reconstructed[[0, 0, 0]], 2.0);
+    assert_close(svd_reconstructed[[0, 1, 1]], 1.0);
+    assert_close(svd_reconstructed[[1, 0, 0]], 3.0);
+    assert_close(svd_reconstructed[[1, 1, 1]], 4.0);
     Ok(())
 }
 
@@ -516,6 +575,7 @@ async fn sql_spectral_and_orthogonalization_queries_execute() -> Result<()> {
                     make_matrix(spectral_values, 2, 2),
                     make_matrix(identity_values, 2, 2)
                 ) AS generalized,
+                matrix_balance_nonsymmetric(make_matrix(spectral_values, 2, 2)) AS balanced,
                 matrix_schur(make_matrix(spectral_values, 2, 2)) AS schur,
                 matrix_polar(make_matrix(spectral_values, 2, 2)) AS polar,
                 matrix_gram_schmidt(make_matrix(basis_values, 2, 2)) AS gram,
@@ -531,10 +591,11 @@ async fn sql_spectral_and_orthogonalization_queries_execute() -> Result<()> {
     assert_eq!(int64_column(&batches[0], 0).value(0), 1);
     assert_eigen_struct_column(&batches[0], 1, 4.0, 9.0);
     assert_eigen_struct_column(&batches[0], 2, 4.0, 9.0);
-    assert_two_tensor_struct_column(&batches[0], 3, 4.0, 9.0);
+    assert_tensor_vector_struct_column(&batches[0], 3, [4.0, 9.0]);
     assert_two_tensor_struct_column(&batches[0], 4, 4.0, 9.0);
-    assert_orthogonal_matrix_column(&batches[0], 5);
+    assert_two_tensor_struct_column(&batches[0], 5, 4.0, 9.0);
     assert_orthogonal_matrix_column(&batches[0], 6);
+    assert_orthogonal_matrix_column(&batches[0], 7);
 
     Ok(())
 }

@@ -53,6 +53,13 @@ top of the released upstream contracts.
     (`tensor_permute_axes` and `tensor_contract_axes`) with variadic integer-axis SQL contracts,
     direct unit coverage, float32 type-propagation coverage, and constructor-backed SQL
     integration coverage.
+22. The decomposition-helper slice now also covers direct real-valued QR and SVD reconstruction
+    (`matrix_qr_reconstruct` and `matrix_svd_reconstruct`) with direct unit coverage, float32
+    type-propagation coverage, and constructor-backed SQL integration coverage.
+23. The spectral-helper slice now also covers direct real-valued non-symmetric balancing
+    (`matrix_balance_nonsymmetric`) with a struct result contract for the balanced matrix plus
+    balancing diagonal, direct unit coverage, float32 type-propagation coverage, square-contract
+    validation, and constructor-backed SQL integration coverage.
 
 ## Current Repository Reality
 

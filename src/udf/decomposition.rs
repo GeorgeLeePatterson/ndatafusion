@@ -175,6 +175,20 @@ fn double_tensor_struct_field(
     Ok(struct_field(name, vec![first.as_ref().clone(), second.as_ref().clone()], nullable))
 }
 
+fn tensor_vector_struct_field(
+    name: &str,
+    value_type: &DataType,
+    tensor_name: &str,
+    tensor_shape: [usize; 2],
+    vector_name: &str,
+    vector_len: usize,
+    nullable: bool,
+) -> Result<FieldRef> {
+    let tensor = fixed_shape_tensor_field(tensor_name, value_type, &tensor_shape, false)?;
+    let vector = vector_field(vector_name, value_type, vector_len, false)?;
+    Ok(struct_field(name, vec![tensor.as_ref().clone(), vector.as_ref().clone()], nullable))
+}
+
 fn validate_positive_usize(function_name: &str, label: &str, value: usize) -> Result<usize> {
     if value == 0 {
         return Err(exec_error(function_name, format!("{label} must be greater than 0")));
@@ -1674,6 +1688,76 @@ impl ScalarUDFImpl for MatrixQrConditionNumber {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixQrReconstruct {
+    signature: Signature,
+}
+
+impl MatrixQrReconstruct {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixQrReconstruct {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_qr_reconstruct" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &matrix.value_type,
+            &[matrix.rows, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        match matrix.value_type {
+            DataType::Float32 => invoke_matrix_tensor_output::<Float32Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                matrix.cols,
+                |view| {
+                    let qr = nabled::linalg::qr::decompose_view(
+                        view,
+                        &nabled::linalg::qr::QRConfig::<f32>::default(),
+                    )?;
+                    Ok::<_, nabled::linalg::qr::QRError>(nabled::linalg::qr::reconstruct_matrix(
+                        &qr,
+                    ))
+                },
+            ),
+            DataType::Float64 => invoke_matrix_tensor_output::<Float64Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                matrix.cols,
+                |view| {
+                    let qr = nabled::linalg::qr::decompose_view(
+                        view,
+                        &nabled::linalg::qr::QRConfig::<f64>::default(),
+                    )?;
+                    Ok::<_, nabled::linalg::qr::QRError>(nabled::linalg::qr::reconstruct_matrix(
+                        &qr,
+                    ))
+                },
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct MatrixSvdPseudoInverse {
     signature: Signature,
 }
@@ -1728,6 +1812,70 @@ impl ScalarUDFImpl for MatrixSvdPseudoInverse {
                         m,
                         &nabled::linalg::svd::PseudoInverseConfig::<f64>::default(),
                     )
+                },
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixSvdReconstruct {
+    signature: Signature,
+}
+
+impl MatrixSvdReconstruct {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixSvdReconstruct {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_svd_reconstruct" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &matrix.value_type,
+            &[matrix.rows, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        match matrix.value_type {
+            DataType::Float32 => invoke_matrix_tensor_output::<Float32Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                matrix.cols,
+                |view| {
+                    let svd = nabled::linalg::svd::decompose_view(view)?;
+                    Ok::<_, nabled::linalg::svd::SVDError>(nabled::linalg::svd::reconstruct_matrix(
+                        &svd,
+                    ))
+                },
+            ),
+            DataType::Float64 => invoke_matrix_tensor_output::<Float64Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                matrix.cols,
+                |view| {
+                    let svd = nabled::linalg::svd::decompose_view(view)?;
+                    Ok::<_, nabled::linalg::svd::SVDError>(nabled::linalg::svd::reconstruct_matrix(
+                        &svd,
+                    ))
                 },
             ),
             actual => {
@@ -1961,6 +2109,131 @@ impl ScalarUDFImpl for MatrixEigenGeneralized {
                 left.rows,
                 nabled::linalg::eigen::generalized_view,
             ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixBalanceNonsymmetric {
+    signature: Signature,
+}
+
+impl MatrixBalanceNonsymmetric {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixBalanceNonsymmetric {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_balance_nonsymmetric" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let (value_type, dimension, _cols, nullable) = square_matrix_shape(&args, self.name())?;
+        tensor_vector_struct_field(
+            self.name(),
+            &value_type,
+            "balanced",
+            [dimension, dimension],
+            "diagonal",
+            dimension,
+            nullable,
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        let matrices = expect_fixed_size_list_arg(&args, 1, self.name())?;
+        match matrix.value_type {
+            DataType::Float32 => {
+                let matrix_view = fixed_shape_tensor_view3::<Float32Type>(
+                    &args.arg_fields[0],
+                    matrices,
+                    self.name(),
+                )?;
+                let batch = matrix_view.len_of(Axis(0));
+                let mut balanced_values = Vec::with_capacity(batch * matrix.rows * matrix.cols);
+                let mut diagonal_values = Vec::with_capacity(batch * matrix.rows);
+                let config = nabled::linalg::eigen::NonsymmetricEigenConfig::<f32>::default();
+                for row in 0..batch {
+                    let (balanced, diagonal) = nabled::linalg::eigen::balance_nonsymmetric_view(
+                        &matrix_view.index_axis(Axis(0), row),
+                        &config,
+                    )
+                    .map_err(|error| exec_error(self.name(), error))?;
+                    balanced_values.extend(balanced.iter().copied());
+                    diagonal_values.extend(diagonal.iter().copied());
+                }
+                let (balanced_field, balanced_array) =
+                    tensor_column("balanced", [batch, matrix.rows, matrix.cols], balanced_values)?;
+                let diagonal_array = fixed_size_list_array_from_flat_rows::<Float32Type>(
+                    self.name(),
+                    batch,
+                    matrix.rows,
+                    &diagonal_values,
+                )?;
+                let diagonal_field =
+                    vector_field("diagonal", &matrix.value_type, matrix.rows, false)?;
+                Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+                    vec![balanced_field, diagonal_field].into(),
+                    vec![balanced_array, Arc::new(diagonal_array)],
+                    None,
+                ))))
+            }
+            DataType::Float64 => {
+                let matrix_view = fixed_shape_tensor_view3::<Float64Type>(
+                    &args.arg_fields[0],
+                    matrices,
+                    self.name(),
+                )?;
+                let batch = matrix_view.len_of(Axis(0));
+                let mut balanced_values = Vec::with_capacity(batch * matrix.rows * matrix.cols);
+                let mut diagonal_values = Vec::with_capacity(batch * matrix.rows);
+                let config = nabled::linalg::eigen::NonsymmetricEigenConfig::<f64>::default();
+                for row in 0..batch {
+                    let (balanced, diagonal) = nabled::linalg::eigen::balance_nonsymmetric_view(
+                        &matrix_view.index_axis(Axis(0), row),
+                        &config,
+                    )
+                    .map_err(|error| exec_error(self.name(), error))?;
+                    balanced_values.extend(balanced.iter().copied());
+                    diagonal_values.extend(diagonal.iter().copied());
+                }
+                let (balanced_field, balanced_array) =
+                    tensor_column("balanced", [batch, matrix.rows, matrix.cols], balanced_values)?;
+                let diagonal_array = fixed_size_list_array_from_flat_rows::<Float64Type>(
+                    self.name(),
+                    batch,
+                    matrix.rows,
+                    &diagonal_values,
+                )?;
+                let diagonal_field =
+                    vector_field("diagonal", &matrix.value_type, matrix.rows, false)?;
+                Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+                    vec![balanced_field, diagonal_field].into(),
+                    vec![balanced_array, Arc::new(diagonal_array)],
+                    None,
+                ))))
+            }
             actual => {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
@@ -2296,8 +2569,18 @@ pub fn matrix_qr_condition_number_udf() -> Arc<ScalarUDF> {
 }
 
 #[must_use]
+pub fn matrix_qr_reconstruct_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixQrReconstruct::new()))
+}
+
+#[must_use]
 pub fn matrix_svd_pseudo_inverse_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixSvdPseudoInverse::new()))
+}
+
+#[must_use]
+pub fn matrix_svd_reconstruct_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixSvdReconstruct::new()))
 }
 
 #[must_use]
@@ -2318,6 +2601,11 @@ pub fn matrix_eigen_symmetric_udf() -> Arc<ScalarUDF> {
 #[must_use]
 pub fn matrix_eigen_generalized_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixEigenGeneralized::new()))
+}
+
+#[must_use]
+pub fn matrix_balance_nonsymmetric_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixBalanceNonsymmetric::new()))
 }
 
 #[must_use]
