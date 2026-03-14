@@ -154,8 +154,8 @@ tag-release version:
     set -euo pipefail
 
     # Ensure we're on main and up to date
-    git checkout main
-    git pull origin main
+    git checkout master
+    git pull origin master
 
     # Verify the version in Cargo.toml matches
     CARGO_VERSION=$(grep -E '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
