@@ -78,27 +78,33 @@ canonical numerical contracts used by the linalg/ml UDFs:
 
 ## Status
 
-The current implementation is no longer scaffold-only. `ndatafusion` now registers the first
-substantial direct batch-native catalog across:
+The current implementation is no longer scaffold-only. `ndatafusion` now registers a substantial
+direct batch-native catalog across 57 scalar UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
 2. dense vector row ops
-3. dense matrix matvec, batched matmul, and LU/Cholesky/QR least-squares solves
+3. dense matrix matvec, batched matmul, lower/upper triangular solves, and
+   LU/Cholesky/QR least-squares solves
 4. struct-valued LU, Cholesky, QR, SVD, and PCA workflows
-5. matrix inverse, determinant, log-determinant, QR condition number, and SVD pseudo-inverse,
-   condition number, and rank
+5. matrix inverse, determinant, log-determinant, QR condition number, SVD pseudo-inverse /
+   condition number / rank, zero-config matrix functions (`matrix_exp_eigen`,
+   `matrix_log_eigen`, `matrix_log_svd`, `matrix_sign`), and configurable matrix functions
+   (`matrix_exp`, `matrix_log_taylor`, `matrix_power`)
 6. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
 7. fixed-shape and variable-shape tensor last-axis reductions, normalization, and batched products
 8. matrix column means and linear regression
 
-The crate also has end-to-end SQL integration coverage for:
+The current admitted real-valued surface supports `Float32` and `Float64` across the implemented
+catalog. The crate also has end-to-end SQL integration coverage for:
 
 1. literal-backed constructor pipelines
 2. list-column-backed vector and matrix queries
-3. sparse plus variable-shape tensor composition
-4. fixed-shape tensor constructor plus reduction pipelines
+3. triangular solve plus matrix-function queries
+4. parameterized matrix-function queries
+5. sparse plus variable-shape tensor composition
+6. fixed-shape tensor constructor plus reduction pipelines
 
-The next milestone is residual admitted parity on top of the current `f64`-first
-constructor-backed catalog. Actual crates.io publication remains blocked until `ndatafusion` can
-depend on a published Arrow-58-compatible DataFusion release instead of the current git revision.
+The next milestone is residual admitted parity on top of the current constructor-backed
+real-valued catalog. Actual crates.io publication remains blocked until `ndatafusion` can depend
+on a published Arrow-58-compatible DataFusion release instead of the current git revision.

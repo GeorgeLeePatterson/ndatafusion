@@ -35,13 +35,13 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 | Data contract layer | shared DataType/Field builders for vector, matrix, tensor, sparse, and complex values | Implemented | `src/metadata.rs` + tests | Shared field builders and validation helpers now own the first SQL-facing numerical contracts. |
 | Direct batch delegation | whole-array delegation into stabilized `nabled::arrow` contracts | Partial | unit tests | Present for the first vector, matrix, sparse, and tensor slices; residual unsupported workflows still fall back to direct ndarray view iteration or remain unimplemented. |
 | Cell codec layer | row extraction and result assembly for lifted `nabled` contracts | Missing | No | Fallback-only layer for workflows that still lack a direct batch-native lower-layer path. |
-| Dense vector surface | row-wise vector kernels (`dot`, norms, cosine, pairwise/batched where natural) | Partial | unit tests | `l2_norm`, `dot`, `cosine_similarity`, `cosine_distance`, and `normalize` now exist for `rows-of-vectors` over `FixedSizeList<Float64>(D)`. |
-| Dense matrix surface | row-wise matrix kernels and helpers | Partial | unit tests + SQL e2e | Row-wise `matrix_matvec`, batched matrix-matrix product, and LU/Cholesky/QR least-squares solves now exist over fixed-shape tensor matrix batches plus fixed-size-list vector batches. |
-| Decomposition surface | struct-returning factorization and solver contracts | Partial | unit tests + SQL e2e | LU, Cholesky, QR, and SVD struct-valued contracts now exist, along with direct QR condition-number and SVD pseudo-inverse / rank / condition-number helpers; additional config-heavy and spectral variants still remain. |
+| Dense vector surface | row-wise vector kernels (`dot`, norms, cosine, pairwise/batched where natural) | Partial | unit tests | `l2_norm`, `dot`, `cosine_similarity`, `cosine_distance`, and `normalize` now exist for `rows-of-vectors` over `FixedSizeList<Float32|Float64>(D)`. |
+| Dense matrix surface | row-wise matrix kernels and helpers | Partial | unit tests + SQL e2e | Row-wise `matrix_matvec`, batched matrix-matrix product, lower/upper triangular solves, lower/upper triangular matrix solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers now exist over square fixed-shape tensor matrix batches plus fixed-size-list vector batches. |
+| Decomposition surface | struct-returning factorization and solver contracts | Partial | unit tests + SQL e2e | LU, Cholesky, QR, and SVD struct-valued contracts now exist, along with direct QR condition-number and SVD pseudo-inverse / rank / condition-number helpers; additional config-heavy and alternate decomposition variants still remain. |
 | Sparse surface | CSR-aware DataFusion contracts and wrappers | Partial | unit tests | Sparse batch matvec, dense matmat, transpose, and sparse matmat now exist over `ndarrow.csr_matrix_batch`. |
-| Tensor surface | fixed-shape tensor contracts and wrappers | Partial | unit tests | Fixed-shape and variable-shape last-axis reductions, normalization, and batched products now exist on the admitted `f64` surface. |
+| Tensor surface | fixed-shape tensor contracts and wrappers | Partial | unit tests | Fixed-shape and variable-shape last-axis reductions, normalization, and batched products now exist on the admitted real-valued surface. |
 | ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests | Column means, centering, covariance, correlation, PCA, and linear regression now exist; callback/config-heavy workflows still remain. |
-| SQL usability | constructors and normalizers from SQL-friendly nested values into canonical contracts | Implemented | unit tests | `make_vector`, `make_matrix`, `make_tensor`, `make_variable_tensor`, and `make_csr_matrix_batch` now cover the admitted `f64` canonical contracts from SQL-style `List` values plus scalar dimensions. |
+| SQL usability | constructors and normalizers from SQL-friendly nested values into canonical contracts | Implemented | unit tests | `make_vector`, `make_matrix`, `make_tensor`, `make_variable_tensor`, and `make_csr_matrix_batch` now cover the admitted real-valued canonical contracts from SQL-style `List` values plus scalar dimensions. |
 | Planner layer | function rewrites or expression planners | Missing | No | Optional for v1 unless required by constructors or ergonomics. |
 | Hardening | examples, integration coverage, docs, and publish checklist readiness | Implemented | `just checks` + `cargo doc --no-default-features --no-deps` | Contract-edge unit coverage, README quick-start examples, crate-level docs, docs.rs metadata, and an explicit publish checklist now exist for the current constructor-backed catalog. |
 
@@ -64,11 +64,11 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 
 | Capability Group | Current Status | Gap |
 |---|---|---|
-| Dense vector and matrix kernels | Partial | Core row-preserving `f64` slices are in place, including row-wise matvec; residual higher-level matrix functions, triangular solves, and spectral helpers remain. |
+| Dense vector and matrix kernels | Partial | Core row-preserving real-valued slices are in place, including row-wise matvec, triangular solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers; residual complex and less SQL-natural helpers remain. |
 | Decomposition and solver workflows | Partial | LU, Cholesky, QR, and SVD contracts now exist, including QR least-squares plus SVD pseudo-inverse/rank/condition-number; residual config-heavy and alternate decomposition variants remain. |
 | Sparse and tensor workflows | Partial | Core sparse batch and tensor last-axis workflows now exist on both fixed-shape and variable-shape carriers. |
-| ML/stat workflows | Partial | Stats, PCA, and linear regression now exist on the admitted `f64` surface; iterative and callback-driven workflows remain open. |
-| Constructor and normalization surface | Implemented | The admitted `f64` constructor set now exists via the `make_*` UDF family over SQL `List` values and explicit shape scalars. |
+| ML/stat workflows | Partial | Stats, PCA, and linear regression now exist on the admitted real-valued surface; iterative and callback-driven workflows remain open. |
+| Constructor and normalization surface | Implemented | The admitted real-valued constructor set now exists via the `make_*` UDF family over SQL `List` values and explicit shape scalars. |
 | Quality and publish hardening | Implemented | Feature-matrix checks, line coverage > 90%, crate docs, docs.rs metadata, README examples, and the publish checklist now exist. |
 
 ### P2: Post-V1 Expansion
@@ -85,7 +85,7 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 `ndatafusion` is not yet sufficient for a v1 publish.
 
 What exists now is the governance baseline, released upstream dependency alignment, a substantial
-`f64`-first constructor-backed catalog, and publish-hardening docs for the current local release
+constructor-backed real-valued catalog, and publish-hardening docs for the current local release
 posture.
 
 Primary remaining work:

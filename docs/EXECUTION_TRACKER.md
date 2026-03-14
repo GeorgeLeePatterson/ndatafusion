@@ -26,9 +26,9 @@ codebase.
 3. `.justfile` quality gates are present and passing on the current tree.
 4. The repository now has authoritative planning docs and AGENTS bootstrap instructions.
 5. `ndatafusion` now depends on published `nabled 0.0.7` and `ndarrow 0.0.3`.
-6. A substantial `f64`-first numerical DataFusion catalog now exists across vector, matrix,
+6. A substantial real-valued numerical DataFusion catalog now exists across vector, matrix,
    decomposition, sparse, tensor, and ML/stat slices.
-7. The catalog now includes SQL-native constructors for the canonical `f64` vector, matrix,
+7. The catalog now includes SQL-native constructors for the canonical real-valued vector, matrix,
    tensor, variable-tensor, and CSR sparse-batch contracts.
 8. README examples and end-to-end SQL integration coverage now exist for the constructor-backed
    catalog.
@@ -85,7 +85,7 @@ order:
     - `just checks` passes on the current tree
     - `cargo llvm-cov --no-default-features --summary-only --lib --test e2e`
       reports line coverage above 90%
-11. `D-011`: `N-010` has now advanced substantially on the admitted `f64`-first surface:
+11. `D-011`: `N-010` has now advanced substantially on the admitted real-valued surface:
     - matrix inverse, determinant, and log-determinant
     - Cholesky decomposition, solve, and inverse
     - QR and SVD struct-return contracts
@@ -93,7 +93,7 @@ order:
     - sparse batch dense matmat, transpose, and sparse matmat
     - fixed-shape and variable-shape tensor norm/normalize/dot/matmul expansions
     - the catalog now exposes 35 registered scalar UDFs with coverage still above 90%
-12. `D-012`: `N-008` is now complete on the current `f64`-first contract:
+12. `D-012`: `N-008` is now complete on the current real-valued contract:
     - `make_vector`
     - `make_matrix`
     - `make_tensor`
@@ -110,25 +110,41 @@ order:
 14. `D-014`: `N-009` publish hardening is now complete for the current local release posture:
     - README install guidance now reflects git consumption instead of implying crates.io
       publication
-    - crate-level rustdoc now documents the constructor-backed `f64`-first contract and quick-start
+    - crate-level rustdoc now documents the constructor-backed real-valued contract and quick-start
       usage
     - docs.rs metadata is configured for `--no-default-features`
     - `docs/PUBLISH_CHECKLIST.md` now records the release gate, release-note minimums, and the
       current DataFusion git-dependency publication blocker
 15. `D-015`: `N-010` has advanced again on dense matrix/decomposition parity:
     - row-wise `matrix_matvec` now exists over canonical matrix/vector batch carriers
-    - QR least-squares and QR condition-number helpers now exist on the direct `f64` matrix batch
-      surface
-    - SVD pseudo-inverse, condition-number, and rank helpers now exist on the direct `f64` matrix
+    - QR least-squares and QR condition-number helpers now exist on the direct real-valued matrix
       batch surface
+    - SVD pseudo-inverse, condition-number, and rank helpers now exist on the direct real-valued
+      matrix batch surface
     - SQL integration coverage now exercises the new matrix helper slice through constructor-backed
       queries
+16. `D-016`: `N-010` has advanced again on matrix parity:
+    - lower/upper triangular vector solves now exist over canonical matrix/vector batch carriers
+    - lower/upper triangular matrix solves now exist over canonical matrix/matrix batch carriers
+    - zero-config matrix functions (`matrix_exp_eigen`, `matrix_log_eigen`, `matrix_log_svd`,
+      `matrix_sign`) now exist over square matrix batches
+    - the current catalog now exposes 54 registered scalar UDFs
+    - unit and SQL integration coverage now exercise the new triangular and matrix-function slice
+17. `D-017`: `N-010` has advanced again on configurable matrix-function parity:
+    - `matrix_exp` now exists over square matrix batches with explicit `max_terms` and
+      `tolerance` scalar arguments
+    - `matrix_log_taylor` now exists over square matrix batches with explicit `max_terms` and
+      `tolerance` scalar arguments
+    - `matrix_power` now exists over square matrix batches with an explicit scalar exponent
+    - shared scalar parsing helpers now cover integer and real scalar contracts directly
+    - the current catalog now exposes 57 registered scalar UDFs
+    - unit and SQL integration coverage now exercise the new parameterized matrix-function slice
 
 ## Next
 
 1. `N-010` (`Layer 3`, `ndatafusion`): Finish the residual admitted type/domain parity work that
-   still fits the `f64`-first, SQL-natural v1 contract while preserving direct batch delegation on
-   hot paths.
+   still fits the current real-valued, SQL-natural v1 contract while preserving direct batch
+   delegation on hot paths.
 
 ## Needed
 
@@ -142,6 +158,6 @@ order:
 ## Round Scope Lock
 
 1. This round starts local `ndatafusion` implementation after the upstream prerequisite releases.
-2. The next execution round should continue `N-010`: residual admitted parity on the `f64`-first
-   catalog.
+2. The next execution round should continue `N-010`: residual admitted parity on the current
+   real-valued catalog.
 3. Preserve the concept-first contract while the current catalog expands.

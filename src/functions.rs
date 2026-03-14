@@ -66,6 +66,31 @@ pub fn matrix_matmul(left: Expr, right: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn matrix_exp(matrix: Expr, max_terms: Expr, tolerance: Expr) -> Expr {
+    udfs::matrix_exp_udf().call(vec![matrix, max_terms, tolerance])
+}
+
+#[must_use]
+pub fn matrix_solve_lower(matrix: Expr, rhs: Expr) -> Expr {
+    udfs::matrix_solve_lower_udf().call(vec![matrix, rhs])
+}
+
+#[must_use]
+pub fn matrix_solve_upper(matrix: Expr, rhs: Expr) -> Expr {
+    udfs::matrix_solve_upper_udf().call(vec![matrix, rhs])
+}
+
+#[must_use]
+pub fn matrix_solve_lower_matrix(matrix: Expr, rhs: Expr) -> Expr {
+    udfs::matrix_solve_lower_matrix_udf().call(vec![matrix, rhs])
+}
+
+#[must_use]
+pub fn matrix_solve_upper_matrix(matrix: Expr, rhs: Expr) -> Expr {
+    udfs::matrix_solve_upper_matrix_udf().call(vec![matrix, rhs])
+}
+
+#[must_use]
 pub fn matrix_lu(matrix: Expr) -> Expr { udfs::matrix_lu_udf().call(vec![matrix]) }
 
 #[must_use]
@@ -127,6 +152,28 @@ pub fn matrix_svd_condition_number(matrix: Expr) -> Expr {
 
 #[must_use]
 pub fn matrix_svd_rank(matrix: Expr) -> Expr { udfs::matrix_svd_rank_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_exp_eigen(matrix: Expr) -> Expr { udfs::matrix_exp_eigen_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_log_taylor(matrix: Expr, max_terms: Expr, tolerance: Expr) -> Expr {
+    udfs::matrix_log_taylor_udf().call(vec![matrix, max_terms, tolerance])
+}
+
+#[must_use]
+pub fn matrix_log_eigen(matrix: Expr) -> Expr { udfs::matrix_log_eigen_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_log_svd(matrix: Expr) -> Expr { udfs::matrix_log_svd_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_power(matrix: Expr, power: Expr) -> Expr {
+    udfs::matrix_power_udf().call(vec![matrix, power])
+}
+
+#[must_use]
+pub fn matrix_sign(matrix: Expr) -> Expr { udfs::matrix_sign_udf().call(vec![matrix]) }
 
 #[must_use]
 pub fn sparse_matvec(matrices: Expr, vectors: Expr) -> Expr {
@@ -228,13 +275,15 @@ mod tests {
         linear_regression, make_csr_matrix_batch, make_matrix, make_tensor, make_variable_tensor,
         make_vector, matrix_center_columns, matrix_cholesky, matrix_cholesky_inverse,
         matrix_cholesky_solve, matrix_column_means, matrix_correlation, matrix_covariance,
-        matrix_determinant, matrix_inverse, matrix_log_determinant, matrix_lu, matrix_lu_solve,
-        matrix_matmul, matrix_matvec, matrix_pca, matrix_qr, matrix_qr_condition_number,
-        matrix_qr_solve_least_squares, matrix_svd, matrix_svd_condition_number,
-        matrix_svd_pseudo_inverse, matrix_svd_rank, sparse_matmat_dense, sparse_matmat_sparse,
-        sparse_matvec, sparse_transpose, tensor_batched_dot_last_axis,
-        tensor_batched_matmul_last_two, tensor_l2_norm_last_axis, tensor_normalize_last_axis,
-        tensor_sum_last_axis, tensor_variable_batched_dot_last_axis,
+        matrix_determinant, matrix_exp, matrix_exp_eigen, matrix_inverse, matrix_log_determinant,
+        matrix_log_eigen, matrix_log_svd, matrix_log_taylor, matrix_lu, matrix_lu_solve,
+        matrix_matmul, matrix_matvec, matrix_pca, matrix_power, matrix_qr,
+        matrix_qr_condition_number, matrix_qr_solve_least_squares, matrix_sign, matrix_solve_lower,
+        matrix_solve_lower_matrix, matrix_solve_upper, matrix_solve_upper_matrix, matrix_svd,
+        matrix_svd_condition_number, matrix_svd_pseudo_inverse, matrix_svd_rank,
+        sparse_matmat_dense, sparse_matmat_sparse, sparse_matvec, sparse_transpose,
+        tensor_batched_dot_last_axis, tensor_batched_matmul_last_two, tensor_l2_norm_last_axis,
+        tensor_normalize_last_axis, tensor_sum_last_axis, tensor_variable_batched_dot_last_axis,
         tensor_variable_l2_norm_last_axis, tensor_variable_normalize_last_axis,
         tensor_variable_sum_last_axis, vector_cosine_distance, vector_cosine_similarity,
         vector_dot, vector_l2_norm, vector_normalize,
@@ -300,10 +349,30 @@ mod tests {
         assert_scalar_function(vector_normalize(one.clone()), "vector_normalize", 1);
         assert_scalar_function(matrix_matvec(one.clone(), two.clone()), "matrix_matvec", 2);
         assert_scalar_function(matrix_matmul(one.clone(), two.clone()), "matrix_matmul", 2);
+        assert_scalar_function(
+            matrix_solve_lower(one.clone(), two.clone()),
+            "matrix_solve_lower",
+            2,
+        );
+        assert_scalar_function(
+            matrix_solve_upper(one.clone(), two.clone()),
+            "matrix_solve_upper",
+            2,
+        );
+        assert_scalar_function(
+            matrix_solve_lower_matrix(one.clone(), two.clone()),
+            "matrix_solve_lower_matrix",
+            2,
+        );
+        assert_scalar_function(
+            matrix_solve_upper_matrix(one.clone(), two.clone()),
+            "matrix_solve_upper_matrix",
+            2,
+        );
     }
 
     #[test]
-    fn decomposition_sparse_tensor_and_ml_helpers_wrap_the_expected_udfs() {
+    fn decomposition_and_matrix_function_helpers_wrap_the_expected_udfs() {
         let one = literal_i64(1);
         let two = literal_i64(2);
         let three = literal_i64(3);
@@ -343,6 +412,28 @@ mod tests {
             1,
         );
         assert_scalar_function(matrix_svd_rank(one.clone()), "matrix_svd_rank", 1);
+        assert_scalar_function(
+            matrix_exp(one.clone(), two.clone(), three.clone()),
+            "matrix_exp",
+            3,
+        );
+        assert_scalar_function(matrix_exp_eigen(one.clone()), "matrix_exp_eigen", 1);
+        assert_scalar_function(
+            matrix_log_taylor(one.clone(), two.clone(), three.clone()),
+            "matrix_log_taylor",
+            3,
+        );
+        assert_scalar_function(matrix_log_eigen(one.clone()), "matrix_log_eigen", 1);
+        assert_scalar_function(matrix_log_svd(one.clone()), "matrix_log_svd", 1);
+        assert_scalar_function(matrix_power(one.clone(), two.clone()), "matrix_power", 2);
+        assert_scalar_function(matrix_sign(one.clone()), "matrix_sign", 1);
+    }
+
+    #[test]
+    fn sparse_and_tensor_helpers_wrap_the_expected_udfs() {
+        let one = literal_i64(1);
+        let two = literal_i64(2);
+
         assert_scalar_function(sparse_matvec(one.clone(), two.clone()), "sparse_matvec", 2);
         assert_scalar_function(
             sparse_matmat_dense(one.clone(), two.clone()),
@@ -396,6 +487,14 @@ mod tests {
             "tensor_variable_batched_dot_last_axis",
             2,
         );
+    }
+
+    #[test]
+    fn ml_helpers_wrap_the_expected_udfs() {
+        let one = literal_i64(1);
+        let two = literal_i64(2);
+        let three = literal_i64(3);
+
         assert_scalar_function(matrix_column_means(one.clone()), "matrix_column_means", 1);
         assert_scalar_function(matrix_center_columns(one.clone()), "matrix_center_columns", 1);
         assert_scalar_function(matrix_covariance(one.clone()), "matrix_covariance", 1);

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::types::Float64Type;
-use datafusion::arrow::array::{Array, ArrayRef, Float64Array, Int64Array, ListArray, StructArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, FixedSizeListArray, Float64Array, Int64Array, ListArray, StructArray,
+};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::common::utils::arrays_into_list_array;
@@ -200,7 +202,7 @@ async fn sql_matrix_helper_queries_execute() -> Result<()> {
     let product = batches[0]
         .column(1)
         .as_any()
-        .downcast_ref::<datafusion::arrow::array::FixedSizeListArray>()
+        .downcast_ref::<FixedSizeListArray>()
         .expect("vector batch output");
     let product = ndarrow::fixed_size_list_as_array2::<Float64Type>(product).expect("product");
     assert_close(product[[0, 0]], 8.0);
@@ -210,6 +212,207 @@ async fn sql_matrix_helper_queries_execute() -> Result<()> {
     assert_close(float64_column(&batches[0], 2).value(0), 2.0);
     assert_close(float64_column(&batches[0], 2).value(1), 4.0 / 3.0);
     assert_eq!(int64_column(&batches[0], 3).values().as_ref(), &[2, 1]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_triangular_and_matrix_function_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef),
+        (
+            "lower_values",
+            Arc::new(nested_float64_list_column(vec![vec![vec![2.0, 0.0], vec![3.0, 1.0]], vec![
+                vec![4.0, 0.0],
+                vec![1.0, 2.0],
+            ]])?) as ArrayRef,
+        ),
+        (
+            "rhs_values",
+            Arc::new(float64_list_array(vec![vec![4.0, 5.0], vec![8.0, 6.0]])) as ArrayRef,
+        ),
+        (
+            "sign_values",
+            Arc::new(nested_float64_list_column(vec![
+                vec![vec![4.0, 0.0], vec![0.0, -9.0]],
+                vec![vec![-2.0, 0.0], vec![0.0, 3.0]],
+            ])?) as ArrayRef,
+        ),
+        (
+            "exp_values",
+            Arc::new(nested_float64_list_column(vec![vec![vec![0.0, 0.0], vec![0.0, 1.0]], vec![
+                vec![1.0, 0.0],
+                vec![0.0, 2.0],
+            ]])?) as ArrayRef,
+        ),
+    ])?;
+    drop(ctx.register_batch("triangular_helpers", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                matrix_solve_lower(make_matrix(lower_values, 2, 2), make_vector(rhs_values, 2)) AS \
+             solved,
+                matrix_sign(make_matrix(sign_values, 2, 2)) AS sign_matrix,
+                matrix_exp_eigen(make_matrix(exp_values, 2, 2)) AS exp_matrix
+             FROM triangular_helpers
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+
+    let solved = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("vector batch output");
+    let solved = ndarrow::fixed_size_list_as_array2::<Float64Type>(solved).expect("solved");
+    assert_close(solved[[0, 0]], 2.0);
+    assert_close(solved[[0, 1]], -1.0);
+    assert_close(solved[[1, 0]], 2.0);
+    assert_close(solved[[1, 1]], 2.0);
+
+    let schema = batches[0].schema();
+    let sign_field = schema.field(2);
+    let sign_matrix = batches[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("sign tensor output");
+    let sign_matrix =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(sign_field, sign_matrix)
+            .expect("sign matrix")
+            .into_dimensionality::<ndarray::Ix3>()
+            .expect("rank-3 sign tensor");
+    assert_close(sign_matrix[[0, 0, 0]], 1.0);
+    assert_close(sign_matrix[[0, 1, 1]], -1.0);
+    assert_close(sign_matrix[[1, 0, 0]], -1.0);
+    assert_close(sign_matrix[[1, 1, 1]], 1.0);
+
+    let exp_field = schema.field(3);
+    let exp_matrix = batches[0]
+        .column(3)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("exp tensor output");
+    let exp_matrix =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(exp_field, exp_matrix)
+            .expect("exp matrix")
+            .into_dimensionality::<ndarray::Ix3>()
+            .expect("rank-3 exp tensor");
+    assert_close(exp_matrix[[0, 0, 0]], 1.0);
+    assert_close(exp_matrix[[0, 1, 1]], 1.0_f64.exp());
+    assert_close(exp_matrix[[1, 0, 0]], 1.0_f64.exp());
+    assert_close(exp_matrix[[1, 1, 1]], 2.0_f64.exp());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_parameterized_matrix_function_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef),
+        (
+            "exp_values",
+            Arc::new(nested_float64_list_column(vec![vec![vec![0.0, 0.0], vec![0.0, 1.0]], vec![
+                vec![1.0, 0.0],
+                vec![0.0, 2.0],
+            ]])?) as ArrayRef,
+        ),
+        (
+            "power_values",
+            Arc::new(nested_float64_list_column(vec![vec![vec![4.0, 0.0], vec![0.0, 9.0]], vec![
+                vec![16.0, 0.0],
+                vec![0.0, 25.0],
+            ]])?) as ArrayRef,
+        ),
+        (
+            "log_values",
+            Arc::new(nested_float64_list_column(vec![vec![vec![1.0, 0.0], vec![0.0, 1.1]], vec![
+                vec![1.0, 0.0],
+                vec![0.0, 1.2],
+            ]])?) as ArrayRef,
+        ),
+    ])?;
+    drop(ctx.register_batch("parameterized_matrix_functions", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                matrix_exp(make_matrix(exp_values, 2, 2), 32, 1e-12) AS exp_matrix,
+                matrix_power(make_matrix(power_values, 2, 2), 0.5) AS root_matrix,
+                matrix_log_taylor(make_matrix(log_values, 2, 2), 64, 1e-12) AS log_matrix
+             FROM parameterized_matrix_functions
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+
+    let schema = batches[0].schema();
+
+    let exp_field = schema.field(1);
+    let exp_matrix = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("exp tensor output");
+    let exp_matrix =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(exp_field, exp_matrix)
+            .expect("exp matrix")
+            .into_dimensionality::<ndarray::Ix3>()
+            .expect("rank-3 exp tensor");
+    assert_close(exp_matrix[[0, 0, 0]], 1.0);
+    assert_close(exp_matrix[[0, 1, 1]], 1.0_f64.exp());
+    assert_close(exp_matrix[[1, 0, 0]], 1.0_f64.exp());
+    assert_close(exp_matrix[[1, 1, 1]], 2.0_f64.exp());
+
+    let root_field = schema.field(2);
+    let root_matrix = batches[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("root tensor output");
+    let root_matrix =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(root_field, root_matrix)
+            .expect("root matrix")
+            .into_dimensionality::<ndarray::Ix3>()
+            .expect("rank-3 root tensor");
+    assert_close(root_matrix[[0, 0, 0]], 2.0);
+    assert_close(root_matrix[[0, 1, 1]], 3.0);
+    assert_close(root_matrix[[1, 0, 0]], 4.0);
+    assert_close(root_matrix[[1, 1, 1]], 5.0);
+
+    let log_field = schema.field(3);
+    let log_matrix = batches[0]
+        .column(3)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("log tensor output");
+    let log_matrix =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(log_field, log_matrix)
+            .expect("log matrix")
+            .into_dimensionality::<ndarray::Ix3>()
+            .expect("rank-3 log tensor");
+    assert_close(log_matrix[[0, 0, 0]], 0.0);
+    assert_close(log_matrix[[0, 1, 1]], 1.1_f64.ln());
+    assert_close(log_matrix[[1, 0, 0]], 0.0);
+    assert_close(log_matrix[[1, 1, 1]], 1.2_f64.ln());
     Ok(())
 }
 
@@ -308,7 +511,7 @@ async fn sql_tensor_constructor_pipeline_executes() -> Result<()> {
     let reduced_storage = batches[0]
         .column(1)
         .as_any()
-        .downcast_ref::<datafusion::arrow::array::FixedSizeListArray>()
+        .downcast_ref::<FixedSizeListArray>()
         .expect("fixed-shape tensor output");
     let reduced =
         ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(reduced_field, reduced_storage)

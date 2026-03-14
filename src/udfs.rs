@@ -15,6 +15,10 @@ pub use crate::udf::decomposition::{
 pub use crate::udf::matrix::{
     matrix_cholesky_solve_udf, matrix_lu_solve_udf, matrix_matmul_udf, matrix_matvec_udf,
 };
+pub use crate::udf::matrix_functions::{
+    matrix_exp_eigen_udf, matrix_exp_udf, matrix_log_eigen_udf, matrix_log_svd_udf,
+    matrix_log_taylor_udf, matrix_power_udf, matrix_sign_udf,
+};
 pub use crate::udf::ml::{
     linear_regression_udf, matrix_center_columns_udf, matrix_column_means_udf,
     matrix_correlation_udf, matrix_covariance_udf, matrix_pca_udf,
@@ -27,6 +31,10 @@ pub use crate::udf::tensor::{
     tensor_l2_norm_last_axis_udf, tensor_normalize_last_axis_udf, tensor_sum_last_axis_udf,
     tensor_variable_batched_dot_last_axis_udf, tensor_variable_l2_norm_last_axis_udf,
     tensor_variable_normalize_last_axis_udf, tensor_variable_sum_last_axis_udf,
+};
+pub use crate::udf::triangular::{
+    matrix_solve_lower_matrix_udf, matrix_solve_lower_udf, matrix_solve_upper_matrix_udf,
+    matrix_solve_upper_udf,
 };
 pub use crate::udf::vector::{
     vector_cosine_distance_udf, vector_cosine_similarity_udf, vector_dot_udf, vector_l2_norm_udf,
@@ -64,6 +72,17 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_svd_pseudo_inverse_udf(),
         matrix_svd_condition_number_udf(),
         matrix_svd_rank_udf(),
+        matrix_solve_lower_udf(),
+        matrix_solve_upper_udf(),
+        matrix_solve_lower_matrix_udf(),
+        matrix_solve_upper_matrix_udf(),
+        matrix_exp_udf(),
+        matrix_exp_eigen_udf(),
+        matrix_log_taylor_udf(),
+        matrix_log_eigen_udf(),
+        matrix_log_svd_udf(),
+        matrix_power_udf(),
+        matrix_sign_udf(),
         sparse_matvec_udf(),
         sparse_matmat_dense_udf(),
         sparse_transpose_udf(),
@@ -92,6 +111,6 @@ mod tests {
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
-        assert_eq!(all_default_functions().len(), 46);
+        assert_eq!(all_default_functions().len(), 57);
     }
 }

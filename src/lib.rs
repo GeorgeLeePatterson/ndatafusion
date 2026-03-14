@@ -4,8 +4,9 @@
 //! It owns `DataFusion` registration, SQL-facing numerical contracts, and constructor UDFs while
 //! delegating numerical semantics to `nabled`.
 //!
-//! The current public contract is `f64`-first. SQL callers should construct canonical numerical
-//! values with the `make_*` UDF family and then pass those values into the linalg/ml catalog.
+//! The current public real-valued contract admits both `Float32` and `Float64` across the
+//! implemented catalog. SQL callers should construct canonical numerical values with the `make_*`
+//! UDF family and then pass those values into the linalg/ml catalog.
 //!
 //! # Quick Start
 //!
@@ -51,10 +52,11 @@
 //!
 //! # Current Domain Coverage
 //!
-//! The currently admitted `f64`-first catalog includes:
+//! The currently admitted real-valued catalog includes:
 //!
 //! - dense vector row operations
-//! - dense matrix products, solves, decompositions, and summary statistics
+//! - dense matrix products, triangular solves, configurable and zero-config matrix functions,
+//!   decompositions, and summary statistics
 //! - sparse CSR batch products and transpose
 //! - fixed-shape and variable-shape tensor last-axis operations
 //! - linear regression and PCA-style ML/stat helpers

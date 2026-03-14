@@ -46,8 +46,9 @@
 22. `ndatafusion` currently targets published `nabled 0.0.7` and `ndarrow 0.0.3`.
 23. `ndatafusion` mirrors `nabled` feature names one-for-one rather than inventing a parallel
     feature taxonomy.
-24. The first admitted local catalog is `f64`-first while the SQL-facing contracts stabilize;
-    `nabled/arrow` is enabled unconditionally because it is the base contract of `ndatafusion`.
+24. The admitted local real-valued catalog supports `Float32` and `Float64` over the implemented
+    surface; `nabled/arrow` is enabled unconditionally because it is the base contract of
+    `ndatafusion`.
 25. When `nabled::arrow` already admits a direct batch-native hot path, `ndatafusion` should use
     it; when it does not, `ndatafusion` may iterate canonical batch carriers as ndarray views
     rather than invent a broad generic row codec prematurely.

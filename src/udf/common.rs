@@ -86,6 +86,124 @@ pub(crate) fn expect_bool_scalar_arg(
     }
 }
 
+fn scalar_usize(value: &ScalarValue, function_name: &str, position: usize) -> Result<usize> {
+    match value {
+        ScalarValue::Int64(Some(value)) => usize::try_from(*value).map_err(|_| {
+            exec_error(
+                function_name,
+                format!("argument {position} must be a non-negative integer, found {value}"),
+            )
+        }),
+        ScalarValue::Int32(Some(value)) => usize::try_from(*value).map_err(|_| {
+            exec_error(
+                function_name,
+                format!("argument {position} must be a non-negative integer, found {value}"),
+            )
+        }),
+        ScalarValue::UInt64(Some(value)) => usize::try_from(*value).map_err(|_| {
+            exec_error(
+                function_name,
+                format!("argument {position} exceeds usize limits, found {value}"),
+            )
+        }),
+        ScalarValue::UInt32(Some(value)) => usize::try_from(*value).map_err(|_| {
+            exec_error(
+                function_name,
+                format!("argument {position} exceeds usize limits, found {value}"),
+            )
+        }),
+        ScalarValue::Int64(None)
+        | ScalarValue::Int32(None)
+        | ScalarValue::UInt64(None)
+        | ScalarValue::UInt32(None)
+        | ScalarValue::Null => Err(scalar_argument_required(function_name, position)),
+        value => Err(exec_error(
+            function_name,
+            format!("argument {position} must be an integer scalar, found {value:?}"),
+        )),
+    }
+}
+
+pub(crate) fn expect_usize_scalar_arg(
+    args: &ScalarFunctionArgs,
+    position: usize,
+    function_name: &str,
+) -> Result<usize> {
+    match &args.args[position - 1] {
+        ColumnarValue::Scalar(value) => scalar_usize(value, function_name, position),
+        ColumnarValue::Array(_) => {
+            Err(exec_error(function_name, format!("argument {position} must be an integer scalar")))
+        }
+    }
+}
+
+pub(crate) fn expect_usize_scalar_argument(
+    args: &ReturnFieldArgs<'_>,
+    position: usize,
+    function_name: &str,
+) -> Result<usize> {
+    match args.scalar_arguments.get(position - 1).copied().flatten() {
+        Some(value) => scalar_usize(value, function_name, position),
+        None => Err(scalar_argument_required(function_name, position)),
+    }
+}
+
+fn scalar_real(value: &ScalarValue, function_name: &str, position: usize) -> Result<f64> {
+    match value {
+        ScalarValue::Float64(Some(value)) => Ok(*value),
+        ScalarValue::Float32(Some(value)) => Ok(f64::from(*value)),
+        ScalarValue::Int64(Some(value)) => value.to_string().parse::<f64>().map_err(|error| {
+            exec_error(
+                function_name,
+                format!("argument {position} could not be represented as f64: {error}"),
+            )
+        }),
+        ScalarValue::Int32(Some(value)) => Ok(f64::from(*value)),
+        ScalarValue::UInt64(Some(value)) => value.to_string().parse::<f64>().map_err(|error| {
+            exec_error(
+                function_name,
+                format!("argument {position} could not be represented as f64: {error}"),
+            )
+        }),
+        ScalarValue::UInt32(Some(value)) => Ok(f64::from(*value)),
+        ScalarValue::Float64(None)
+        | ScalarValue::Float32(None)
+        | ScalarValue::Int64(None)
+        | ScalarValue::Int32(None)
+        | ScalarValue::UInt64(None)
+        | ScalarValue::UInt32(None)
+        | ScalarValue::Null => Err(scalar_argument_required(function_name, position)),
+        value => Err(exec_error(
+            function_name,
+            format!("argument {position} must be a numeric scalar, found {value:?}"),
+        )),
+    }
+}
+
+pub(crate) fn expect_real_scalar_arg(
+    args: &ScalarFunctionArgs,
+    position: usize,
+    function_name: &str,
+) -> Result<f64> {
+    match &args.args[position - 1] {
+        ColumnarValue::Scalar(value) => scalar_real(value, function_name, position),
+        ColumnarValue::Array(_) => {
+            Err(exec_error(function_name, format!("argument {position} must be a numeric scalar")))
+        }
+    }
+}
+
+pub(crate) fn expect_real_scalar_argument(
+    args: &ReturnFieldArgs<'_>,
+    position: usize,
+    function_name: &str,
+) -> Result<f64> {
+    match args.scalar_arguments.get(position - 1).copied().flatten() {
+        Some(value) => scalar_real(value, function_name, position),
+        None => Err(scalar_argument_required(function_name, position)),
+    }
+}
+
 pub(crate) fn expect_bool_scalar_argument(
     args: &ReturnFieldArgs<'_>,
     position: usize,
@@ -324,6 +442,102 @@ mod tests {
         let array_error = expect_bool_scalar_arg(&array_exec_args, 1, "linear_regression")
             .expect_err("array should fail");
         assert!(array_error.to_string().contains("must be a scalar Boolean"));
+    }
+
+    #[test]
+    fn integer_scalar_helpers_validate_type_range_and_array_cases() {
+        let value = ScalarValue::Int64(Some(3));
+        let arg_fields = vec![dummy_field("count")];
+        let scalar_refs = vec![Some(&value)];
+        let return_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &scalar_refs };
+        assert_eq!(
+            expect_usize_scalar_argument(&return_args, 1, "matrix_exp").expect("integer scalar"),
+            3
+        );
+
+        let negative_refs = vec![Some(&ScalarValue::Int64(Some(-1)))];
+        let negative_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &negative_refs };
+        let negative_error = expect_usize_scalar_argument(&negative_args, 1, "matrix_exp")
+            .expect_err("negative integer should fail");
+        assert!(negative_error.to_string().contains("must be a non-negative integer"));
+
+        let wrong_refs = vec![Some(&ScalarValue::Float64(Some(1.0)))];
+        let wrong_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &wrong_refs };
+        let wrong_error = expect_usize_scalar_argument(&wrong_args, 1, "matrix_exp")
+            .expect_err("float should fail");
+        assert!(wrong_error.to_string().contains("must be an integer scalar"));
+
+        let exec_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Scalar(ScalarValue::UInt32(Some(4)))],
+            arg_fields:     vec![dummy_field("count")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        assert_eq!(expect_usize_scalar_arg(&exec_args, 1, "matrix_exp").expect("u32 scalar"), 4);
+
+        let array_exec_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Array(Arc::new(Int64Array::from(vec![1_i64])))],
+            arg_fields:     vec![dummy_field("count")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        let array_error = expect_usize_scalar_arg(&array_exec_args, 1, "matrix_exp")
+            .expect_err("array should fail");
+        assert!(array_error.to_string().contains("must be an integer scalar"));
+    }
+
+    #[test]
+    fn real_scalar_helpers_validate_type_null_and_array_cases() {
+        let value = ScalarValue::Float32(Some(1.5));
+        let arg_fields = vec![dummy_field("power")];
+        let scalar_refs = vec![Some(&value)];
+        let return_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &scalar_refs };
+        let parsed =
+            expect_real_scalar_argument(&return_args, 1, "matrix_power").expect("float scalar");
+        assert!((parsed - 1.5_f64).abs() < f64::EPSILON);
+
+        let int_value = ScalarValue::Int64(Some(2));
+        let int_refs = vec![Some(&int_value)];
+        let int_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &int_refs };
+        let parsed_int =
+            expect_real_scalar_argument(&int_args, 1, "matrix_power").expect("int scalar");
+        assert!((parsed_int - 2.0_f64).abs() < f64::EPSILON);
+
+        let wrong_refs = vec![Some(&ScalarValue::Boolean(Some(true)))];
+        let wrong_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &wrong_refs };
+        let wrong_error = expect_real_scalar_argument(&wrong_args, 1, "matrix_power")
+            .expect_err("bool should fail");
+        assert!(wrong_error.to_string().contains("must be a numeric scalar"));
+
+        let exec_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(0.5)))],
+            arg_fields:     vec![dummy_field("power")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        let parsed_exec =
+            expect_real_scalar_arg(&exec_args, 1, "matrix_power").expect("float64 scalar");
+        assert!((parsed_exec - 0.5_f64).abs() < f64::EPSILON);
+
+        let array_exec_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Array(Arc::new(Float32Array::from(vec![1.0_f32])))],
+            arg_fields:     vec![dummy_field("power")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        let array_error = expect_real_scalar_arg(&array_exec_args, 1, "matrix_power")
+            .expect_err("array should fail");
+        assert!(array_error.to_string().contains("must be a numeric scalar"));
     }
 
     #[test]

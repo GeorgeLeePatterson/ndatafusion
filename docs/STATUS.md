@@ -15,7 +15,7 @@ top of the released upstream contracts.
 6. `ndatafusion` mirrors `nabled`'s feature flags one-for-one.
 7. A real local registration/catalog surface now exists via `register_all`, `functions`, `udfs`,
    shared metadata/error helpers, and domain modules.
-8. A substantial `f64`-first numerical DataFusion UDF catalog is now implemented directly as the
+8. A substantial real-valued numerical DataFusion UDF catalog is now implemented directly as the
    crate surface.
 9. The current catalog now includes SQL constructors for canonical dense vector, dense matrix,
    fixed-shape tensor, variable-shape tensor, and CSR sparse-batch contracts.
@@ -24,8 +24,9 @@ top of the released upstream contracts.
 11. The active ingress model remains concept-first: each mathematical object family needs one
     canonical standalone ingress and one canonical `rows-of-X` batch carrier.
 12. End-to-end SQL integration coverage now exists for literal-backed constructors, list-column
-    constructor pipelines, sparse-plus-variable-tensor composition, and fixed-shape tensor
-    constructor/reduction flows.
+    constructor pipelines, triangular solve plus matrix-function flows,
+    parameterized matrix-function flows, sparse-plus-variable-tensor composition, and fixed-shape
+    tensor constructor/reduction flows.
 13. Crate-level rustdoc, docs.rs metadata, and an explicit publish checklist now exist for the
     current constructor-backed surface.
 14. crates.io publication is still intentionally blocked while `ndatafusion` depends on a git
@@ -33,6 +34,12 @@ top of the released upstream contracts.
 15. The dense matrix/decomposition slice now also covers row-wise `matrix_matvec`, QR
     least-squares, QR condition number, and SVD pseudo-inverse / condition-number / rank helpers,
     with SQL integration coverage for the new helper family.
+16. The dense matrix slice now also covers lower/upper triangular solves, lower/upper triangular
+    matrix solves, and zero-config matrix functions (`matrix_exp_eigen`, `matrix_log_eigen`,
+    `matrix_log_svd`, `matrix_sign`) across the admitted real-valued surface.
+17. The matrix-function slice now also covers configurable matrix exponential / logarithm / power
+    helpers (`matrix_exp`, `matrix_log_taylor`, `matrix_power`) with scalar-parameter validation,
+    direct unit coverage, and SQL integration coverage.
 
 ## Current Repository Reality
 
@@ -46,7 +53,7 @@ top of the released upstream contracts.
 5. The fallback generic cell-codec layer still does not exist; residual unsupported workflows are
    currently handled case-by-case or remain unimplemented.
 6. SQL-native constructor ingress now exists from ordinary `List` values into the canonical
-   `f64` vector, matrix, tensor, variable-tensor, and CSR sparse-batch contracts.
+   real-valued vector, matrix, tensor, variable-tensor, and CSR sparse-batch contracts.
 7. README-level quick-start examples now match real constructor-backed SQL flows.
 8. Current validation covers both successful batch-native paths and representative type, shape,
    scalar-argument, and batch-length failure contracts.
@@ -90,7 +97,7 @@ Target ownership after the first real implementation rounds:
 
 Local implementation round:
 
-1. Finish the residual admitted `f64`-first catalog that still fits the direct batch-delegation
+1. Finish the residual admitted real-valued catalog that still fits the direct batch-delegation
    model.
 2. Preserve the current publish-hardening posture while the catalog grows.
 3. Revisit crates.io publication only once DataFusion exposes a compatible published release line.
@@ -101,6 +108,6 @@ Not ready.
 
 Blocked by:
 
-1. residual admitted parity work that still fits the `f64`-first v1 contract
+1. residual admitted parity work that still fits the current real-valued v1 contract
 2. the current DataFusion git dependency, which blocks crates.io publication until a compatible
    published release exists

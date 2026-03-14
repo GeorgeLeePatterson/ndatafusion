@@ -1216,6 +1216,308 @@ fn matrix_qr_and_svd_helper_udfs_cover_solver_scalar_and_inverse_outputs() {
 }
 
 #[test]
+fn lower_triangular_udfs_cover_outputs() {
+    let lower_solve_udf = udfs::matrix_solve_lower_udf();
+    let lower_matrix_udf = udfs::matrix_solve_lower_matrix_udf();
+
+    let (lower_field, lower_matrices) =
+        matrix_batch("lower", [[[2.0, 0.0], [3.0, 1.0]], [[4.0, 0.0], [1.0, 2.0]]]);
+    let lower_rhs = fixed_size_list([[4.0, 5.0], [8.0, 5.0]]);
+    let lower_rhs_field =
+        vector_field("lower_rhs", &DataType::Float64, 2, false).expect("lower rhs field");
+    let (_, lower_solution) = invoke_udf(
+        &lower_solve_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(lower_matrices.clone())),
+            ColumnarValue::Array(Arc::new(lower_rhs)),
+        ],
+        vec![Arc::clone(&lower_field), lower_rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_solve_lower");
+    let lower_solution =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(fixed_size_list_array(&lower_solution))
+            .expect("lower triangular solution");
+    assert_close(lower_solution[[0, 0]], 2.0);
+    assert_close(lower_solution[[0, 1]], -1.0);
+    assert_close(lower_solution[[1, 0]], 2.0);
+    assert_close(lower_solution[[1, 1]], 1.5);
+
+    let (lower_rhs_matrix_field, lower_rhs_matrices) =
+        matrix_batch("lower_rhs_matrix", [[[4.0, 2.0], [5.0, 1.0]], [[8.0, 4.0], [5.0, 3.0]]]);
+    let (lower_matrix_field, lower_matrix_solution) = invoke_udf(
+        &lower_matrix_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(lower_matrices)),
+            ColumnarValue::Array(Arc::new(lower_rhs_matrices)),
+        ],
+        vec![lower_field, lower_rhs_matrix_field],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_solve_lower_matrix");
+    let lower_matrix_solution = fixed_shape_view3(&lower_matrix_field, &lower_matrix_solution);
+    assert_close(lower_matrix_solution[[0, 0, 0]], 2.0);
+    assert_close(lower_matrix_solution[[0, 0, 1]], 1.0);
+    assert_close(lower_matrix_solution[[0, 1, 0]], -1.0);
+    assert_close(lower_matrix_solution[[0, 1, 1]], -2.0);
+    assert_close(lower_matrix_solution[[1, 0, 0]], 2.0);
+    assert_close(lower_matrix_solution[[1, 0, 1]], 1.0);
+    assert_close(lower_matrix_solution[[1, 1, 0]], 1.5);
+    assert_close(lower_matrix_solution[[1, 1, 1]], 1.0);
+}
+
+#[test]
+fn upper_triangular_udfs_cover_outputs() {
+    let upper_solve_udf = udfs::matrix_solve_upper_udf();
+    let upper_matrix_udf = udfs::matrix_solve_upper_matrix_udf();
+
+    let (upper_field, upper_matrices) =
+        matrix_batch("upper", [[[2.0, 3.0], [0.0, 4.0]], [[5.0, 1.0], [0.0, 2.0]]]);
+    let upper_rhs = fixed_size_list([[8.0, 12.0], [9.0, 4.0]]);
+    let upper_rhs_field =
+        vector_field("upper_rhs", &DataType::Float64, 2, false).expect("upper rhs field");
+    let (_, upper_solution) = invoke_udf(
+        &upper_solve_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(upper_matrices.clone())),
+            ColumnarValue::Array(Arc::new(upper_rhs)),
+        ],
+        vec![Arc::clone(&upper_field), upper_rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_solve_upper");
+    let upper_solution =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(fixed_size_list_array(&upper_solution))
+            .expect("upper triangular solution");
+    assert_close(upper_solution[[0, 0]], -0.5);
+    assert_close(upper_solution[[0, 1]], 3.0);
+    assert_close(upper_solution[[1, 0]], 1.4);
+    assert_close(upper_solution[[1, 1]], 2.0);
+
+    let (upper_rhs_matrix_field, upper_rhs_matrices) =
+        matrix_batch("upper_rhs_matrix", [[[8.0, 2.0], [12.0, 8.0]], [[9.0, 7.0], [4.0, 6.0]]]);
+    let (upper_matrix_field, upper_matrix_solution) = invoke_udf(
+        &upper_matrix_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(upper_matrices)),
+            ColumnarValue::Array(Arc::new(upper_rhs_matrices)),
+        ],
+        vec![upper_field, upper_rhs_matrix_field],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_solve_upper_matrix");
+    let upper_matrix_solution = fixed_shape_view3(&upper_matrix_field, &upper_matrix_solution);
+    assert_close(upper_matrix_solution[[0, 0, 0]], -0.5);
+    assert_close(upper_matrix_solution[[0, 0, 1]], -2.0);
+    assert_close(upper_matrix_solution[[0, 1, 0]], 3.0);
+    assert_close(upper_matrix_solution[[0, 1, 1]], 2.0);
+    assert_close(upper_matrix_solution[[1, 0, 0]], 1.4);
+    assert_close(upper_matrix_solution[[1, 0, 1]], 0.8);
+    assert_close(upper_matrix_solution[[1, 1, 0]], 2.0);
+    assert_close(upper_matrix_solution[[1, 1, 1]], 3.0);
+}
+
+#[test]
+fn matrix_zero_config_function_udfs_cover_outputs() {
+    let exp_eigen_udf = udfs::matrix_exp_eigen_udf();
+    let log_eigen_udf = udfs::matrix_log_eigen_udf();
+    let log_svd_udf = udfs::matrix_log_svd_udf();
+    let sign_udf = udfs::matrix_sign_udf();
+    let (exp_field, exp_matrices) =
+        matrix_batch("exp", [[[0.0, 0.0], [0.0, 1.0]], [[1.0, 0.0], [0.0, 2.0]]]);
+
+    let (exp_eigen_field, exp_eigen_output) = invoke_udf(
+        &exp_eigen_udf,
+        vec![ColumnarValue::Array(Arc::new(exp_matrices))],
+        vec![exp_field],
+        &[None],
+        2,
+    )
+    .expect("matrix_exp_eigen");
+    let exp_eigen_output = fixed_shape_view3(&exp_eigen_field, &exp_eigen_output);
+    assert_close(exp_eigen_output[[0, 0, 0]], 1.0);
+    assert_close(exp_eigen_output[[0, 1, 1]], 1.0_f64.exp());
+    assert_close(exp_eigen_output[[1, 0, 0]], 1.0_f64.exp());
+    assert_close(exp_eigen_output[[1, 1, 1]], 2.0_f64.exp());
+
+    let (log_field, log_matrices) = matrix_batch("log", [
+        [[1.0, 0.0], [0.0, std::f64::consts::E]],
+        [[std::f64::consts::E.powi(2), 0.0], [0.0, std::f64::consts::E.powi(3)]],
+    ]);
+    let (log_eigen_field, log_eigen_output) = invoke_udf(
+        &log_eigen_udf,
+        vec![ColumnarValue::Array(Arc::new(log_matrices.clone()))],
+        vec![Arc::clone(&log_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_log_eigen");
+    let log_eigen_output = fixed_shape_view3(&log_eigen_field, &log_eigen_output);
+    assert_close(log_eigen_output[[0, 0, 0]], 0.0);
+    assert_close(log_eigen_output[[0, 1, 1]], 1.0);
+    assert_close(log_eigen_output[[1, 0, 0]], 2.0);
+    assert_close(log_eigen_output[[1, 1, 1]], 3.0);
+
+    let (log_svd_field, log_svd_output) = invoke_udf(
+        &log_svd_udf,
+        vec![ColumnarValue::Array(Arc::new(log_matrices))],
+        vec![log_field],
+        &[None],
+        2,
+    )
+    .expect("matrix_log_svd");
+    let log_svd_output = fixed_shape_view3(&log_svd_field, &log_svd_output);
+    assert_close(log_svd_output[[0, 0, 0]], 0.0);
+    assert_close(log_svd_output[[0, 1, 1]], 1.0);
+    assert_close(log_svd_output[[1, 0, 0]], 2.0);
+    assert_close(log_svd_output[[1, 1, 1]], 3.0);
+
+    let (sign_field, sign_matrices) =
+        matrix_batch("sign", [[[4.0, 0.0], [0.0, -9.0]], [[-2.0, 0.0], [0.0, 3.0]]]);
+    let (sign_return_field, sign_output) = invoke_udf(
+        &sign_udf,
+        vec![ColumnarValue::Array(Arc::new(sign_matrices))],
+        vec![sign_field],
+        &[None],
+        2,
+    )
+    .expect("matrix_sign");
+    let sign_output = fixed_shape_view3(&sign_return_field, &sign_output);
+    assert_close(sign_output[[0, 0, 0]], 1.0);
+    assert_close(sign_output[[0, 1, 1]], -1.0);
+    assert_close(sign_output[[1, 0, 0]], -1.0);
+    assert_close(sign_output[[1, 1, 1]], 1.0);
+}
+
+#[test]
+fn parameterized_matrix_function_udfs_cover_outputs() {
+    let exp_udf = udfs::matrix_exp_udf();
+    let log_taylor_udf = udfs::matrix_log_taylor_udf();
+    let power_udf = udfs::matrix_power_udf();
+
+    let (exp_field, exp_matrices) =
+        matrix_batch("exp", [[[0.0, 0.0], [0.0, 1.0]], [[1.0, 0.0], [0.0, 2.0]]]);
+    let scalar_terms = ScalarValue::Int64(Some(32));
+    let scalar_tolerance = ScalarValue::Float64(Some(1.0e-12));
+    let (exp_return_field, exp_output) = invoke_udf(
+        &exp_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(exp_matrices)),
+            ColumnarValue::Scalar(scalar_terms.clone()),
+            ColumnarValue::Scalar(scalar_tolerance.clone()),
+        ],
+        vec![
+            exp_field,
+            Arc::new(Field::new("max_terms", DataType::Int64, false)),
+            Arc::new(Field::new("tolerance", DataType::Float64, false)),
+        ],
+        &[None, Some(scalar_terms.clone()), Some(scalar_tolerance.clone())],
+        2,
+    )
+    .expect("matrix_exp");
+    let exp_output = fixed_shape_view3(&exp_return_field, &exp_output);
+    assert_close(exp_output[[0, 0, 0]], 1.0);
+    assert_close(exp_output[[0, 1, 1]], 1.0_f64.exp());
+    assert_close(exp_output[[1, 0, 0]], 1.0_f64.exp());
+    assert_close(exp_output[[1, 1, 1]], 2.0_f64.exp());
+
+    let (log_taylor_field, log_taylor_matrices) =
+        matrix_batch("log_taylor", [[[1.0, 0.0], [0.0, 1.1]], [[1.0, 0.0], [0.0, 1.2]]]);
+    let (log_taylor_return_field, log_taylor_output) = invoke_udf(
+        &log_taylor_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(log_taylor_matrices)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(64))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-12))),
+        ],
+        vec![
+            Arc::clone(&log_taylor_field),
+            Arc::new(Field::new("max_terms", DataType::Int64, false)),
+            Arc::new(Field::new("tolerance", DataType::Float64, false)),
+        ],
+        &[None, Some(ScalarValue::Int64(Some(64))), Some(ScalarValue::Float64(Some(1.0e-12)))],
+        2,
+    )
+    .expect("matrix_log_taylor");
+    let log_taylor_output = fixed_shape_view3(&log_taylor_return_field, &log_taylor_output);
+    assert_close(log_taylor_output[[0, 0, 0]], 0.0);
+    assert_close(log_taylor_output[[0, 1, 1]], 1.1_f64.ln());
+    assert_close(log_taylor_output[[1, 0, 0]], 0.0);
+    assert_close(log_taylor_output[[1, 1, 1]], 1.2_f64.ln());
+
+    let (power_field, power_matrices) =
+        matrix_batch("power", [[[4.0, 0.0], [0.0, 9.0]], [[16.0, 0.0], [0.0, 25.0]]]);
+    let (power_return_field, power_output) = invoke_udf(
+        &power_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(power_matrices)),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(0.5))),
+        ],
+        vec![power_field, Arc::new(Field::new("power", DataType::Float64, false))],
+        &[None, Some(ScalarValue::Float64(Some(0.5)))],
+        2,
+    )
+    .expect("matrix_power");
+    let power_output = fixed_shape_view3(&power_return_field, &power_output);
+    assert_close(power_output[[0, 0, 0]], 2.0);
+    assert_close(power_output[[0, 1, 1]], 3.0);
+    assert_close(power_output[[1, 0, 0]], 4.0);
+    assert_close(power_output[[1, 1, 1]], 5.0);
+}
+
+#[test]
+fn parameterized_matrix_function_udfs_validate_scalar_contracts() {
+    let exp_udf = udfs::matrix_exp_udf();
+    let log_taylor_udf = udfs::matrix_log_taylor_udf();
+    let power_udf = udfs::matrix_power_udf();
+    let (field, matrices) = matrix_batch("matrix", [[[1.0, 0.0], [0.0, 1.1]]]);
+    let max_terms_field = Arc::new(Field::new("max_terms", DataType::Int64, false));
+    let tolerance_field = Arc::new(Field::new("tolerance", DataType::Float64, false));
+    let power_field = Arc::new(Field::new("power", DataType::Float64, false));
+
+    let missing_scalar_error = invoke_udf_error(
+        &exp_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(16))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-8))),
+        ],
+        vec![Arc::clone(&field), Arc::clone(&max_terms_field), Arc::clone(&tolerance_field)],
+        &[None, None, Some(ScalarValue::Float64(Some(1.0e-8)))],
+        1,
+    );
+    let tolerance_error = invoke_udf_error(
+        &log_taylor_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(16))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(-1.0))),
+        ],
+        vec![Arc::clone(&field), Arc::clone(&max_terms_field), Arc::clone(&tolerance_field)],
+        &[None, Some(ScalarValue::Int64(Some(16))), Some(ScalarValue::Float64(Some(-1.0)))],
+        1,
+    );
+    let runtime_scalar_error = invoke_udf_error(
+        &power_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices)),
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![0.5]))),
+        ],
+        vec![field, power_field],
+        &[None, Some(ScalarValue::Float64(Some(0.5)))],
+        1,
+    );
+
+    assert!(missing_scalar_error.contains("argument 2 must be a non-null scalar"));
+    assert!(tolerance_error.contains("tolerance must be positive"));
+    assert!(runtime_scalar_error.contains("argument 2 must be a numeric scalar"));
+}
+
+#[test]
 fn matrix_stats_and_pca_udfs_cover_batch_outputs() {
     let (field, matrices) =
         matrix_batch("stats", [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], [[1.0, 0.0], [0.0, 1.0], [
@@ -1677,6 +1979,61 @@ fn matrix_udfs_validate_shape_contracts() {
     assert!(lu_error.contains("matrix_lu requires square matrices"));
     assert!(rhs_error.contains("matrix_lu_solve requires square matrices"));
     assert!(qr_rhs_error.contains("rhs vector length mismatch"));
+}
+
+#[test]
+fn triangular_and_matrix_function_udfs_validate_shape_contracts() {
+    let solve_lower_udf = udfs::matrix_solve_lower_udf();
+    let solve_upper_udf = udfs::matrix_solve_upper_udf();
+    let solve_lower_matrix_udf = udfs::matrix_solve_lower_matrix_udf();
+    let sign_udf = udfs::matrix_sign_udf();
+    let (square_field, square) = matrix_batch("square", [[[2.0, 0.0], [0.0, 4.0]]]);
+    let (nonsquare_field, nonsquare) =
+        matrix_batch("nonsquare", [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]);
+    let short_rhs = fixed_size_list([[1.0, 2.0, 3.0]]);
+    let short_rhs_field =
+        vector_field("rhs_long", &DataType::Float64, 3, false).expect("rhs long field");
+    let (rhs_matrix_field, rhs_matrices) = matrix_batch("rhs_matrix", [[[1.0], [2.0], [3.0]]]);
+
+    let lower_square_error = invoke_udf_error(
+        &solve_lower_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(nonsquare.clone())),
+            ColumnarValue::Array(Arc::new(short_rhs.clone())),
+        ],
+        vec![Arc::clone(&nonsquare_field), Arc::clone(&short_rhs_field)],
+        &[None, None],
+        1,
+    );
+    let upper_rhs_error = invoke_udf_error(
+        &solve_upper_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(square.clone())),
+            ColumnarValue::Array(Arc::new(short_rhs)),
+        ],
+        vec![Arc::clone(&square_field), short_rhs_field],
+        &[None, None],
+        1,
+    );
+    let lower_matrix_rhs_error = invoke_udf_error(
+        &solve_lower_matrix_udf,
+        vec![ColumnarValue::Array(Arc::new(square)), ColumnarValue::Array(Arc::new(rhs_matrices))],
+        vec![square_field, rhs_matrix_field],
+        &[None, None],
+        1,
+    );
+    let sign_error = invoke_udf_error(
+        &sign_udf,
+        vec![ColumnarValue::Array(Arc::new(nonsquare))],
+        vec![nonsquare_field],
+        &[None],
+        1,
+    );
+
+    assert!(lower_square_error.contains("requires square matrices"));
+    assert!(upper_rhs_error.contains("rhs vector length mismatch"));
+    assert!(lower_matrix_rhs_error.contains("rhs matrix row mismatch"));
+    assert!(sign_error.contains("requires square matrices"));
 }
 
 #[test]
@@ -2271,6 +2628,124 @@ fn matrix_and_decomposition_udfs_cover_float32_branches() {
     match output {
         ColumnarValue::Array(_) => {}
         ColumnarValue::Scalar(_) => panic!("expected array output"),
+    }
+}
+
+#[test]
+fn triangular_udfs_cover_float32_branches() {
+    let (triangular_field, triangular_matrices) =
+        matrix_batch_f32("triangular", [[[2.0, 0.0], [1.0, 4.0]]]);
+    let rhs_field = vector_field("rhs", &DataType::Float32, 2, false).expect("rhs field");
+    let rhs = fixed_size_list_f32([[4.0, 10.0]]);
+    let (rhs_matrix_field, rhs_matrices) =
+        matrix_batch_f32("rhs_matrix", [[[4.0, 8.0], [10.0, 12.0]]]);
+
+    for udf in [udfs::matrix_solve_lower_udf(), udfs::matrix_solve_upper_udf()] {
+        let (field, output) = invoke_udf(
+            &udf,
+            vec![
+                ColumnarValue::Array(Arc::new(triangular_matrices.clone())),
+                ColumnarValue::Array(Arc::new(rhs.clone())),
+            ],
+            vec![Arc::clone(&triangular_field), Arc::clone(&rhs_field)],
+            &[None, None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), field.data_type());
+    }
+
+    for udf in [udfs::matrix_solve_lower_matrix_udf(), udfs::matrix_solve_upper_matrix_udf()] {
+        let (field, output) = invoke_udf(
+            &udf,
+            vec![
+                ColumnarValue::Array(Arc::new(triangular_matrices.clone())),
+                ColumnarValue::Array(Arc::new(rhs_matrices.clone())),
+            ],
+            vec![Arc::clone(&triangular_field), Arc::clone(&rhs_matrix_field)],
+            &[None, None],
+            1,
+        )
+        .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), field.data_type());
+    }
+}
+
+#[test]
+fn matrix_function_udfs_cover_float32_branches() {
+    let (exp_field, exp_matrices) = matrix_batch_f32("exp", [[[0.0, 0.0], [0.0, 1.0]]]);
+    let (exp_taylor_field, exp_taylor_matrices) =
+        matrix_batch_f32("exp_taylor", [[[0.0, 0.0], [0.0, 1.0]]]);
+    let (log_field, log_matrices) =
+        matrix_batch_f32("log", [[[1.0, 0.0], [0.0, std::f32::consts::E.powi(2)]]]);
+    let (log_taylor_field, log_taylor_matrices) =
+        matrix_batch_f32("log_taylor", [[[1.0, 0.0], [0.0, 1.1]]]);
+    let (power_field, power_matrices) = matrix_batch_f32("power", [[[4.0, 0.0], [0.0, 9.0]]]);
+    let (sign_field, sign_matrices) = matrix_batch_f32("sign", [[[4.0, 0.0], [0.0, -2.0]]]);
+
+    for (udf, field, values) in [
+        (udfs::matrix_exp_eigen_udf(), Arc::clone(&exp_field), exp_matrices),
+        (udfs::matrix_log_eigen_udf(), Arc::clone(&log_field), log_matrices.clone()),
+        (udfs::matrix_log_svd_udf(), log_field, log_matrices),
+        (udfs::matrix_sign_udf(), sign_field, sign_matrices),
+    ] {
+        let (return_field, output) =
+            invoke_udf(&udf, vec![ColumnarValue::Array(Arc::new(values))], vec![field], &[None], 1)
+                .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), return_field.data_type());
+    }
+
+    for (udf, field, values, scalar_args, scalar_fields) in [
+        (
+            udfs::matrix_exp_udf(),
+            exp_taylor_field,
+            exp_taylor_matrices,
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(32))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-6))),
+            ],
+            vec![
+                Arc::new(Field::new("max_terms", DataType::Int64, false)),
+                Arc::new(Field::new("tolerance", DataType::Float64, false)),
+            ],
+        ),
+        (
+            udfs::matrix_log_taylor_udf(),
+            log_taylor_field,
+            log_taylor_matrices,
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(64))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-6))),
+            ],
+            vec![
+                Arc::new(Field::new("max_terms", DataType::Int64, false)),
+                Arc::new(Field::new("tolerance", DataType::Float64, false)),
+            ],
+        ),
+        (
+            udfs::matrix_power_udf(),
+            power_field,
+            power_matrices,
+            vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(0.5)))],
+            vec![Arc::new(Field::new("power", DataType::Float64, false))],
+        ),
+    ] {
+        let mut args = vec![ColumnarValue::Array(Arc::new(values))];
+        args.extend(scalar_args.clone());
+        let mut arg_fields = vec![field];
+        arg_fields.extend(scalar_fields);
+        let scalar_arguments = scalar_args
+            .into_iter()
+            .map(|value| match value {
+                ColumnarValue::Scalar(value) => Some(value),
+                ColumnarValue::Array(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let mut scalar_refs = vec![None];
+        scalar_refs.extend(scalar_arguments);
+        let (return_field, output) = invoke_udf(&udf, args, arg_fields, &scalar_refs, 1)
+            .unwrap_or_else(|error| panic!("{} f32: {error}", udf.name()));
+        assert_eq!(array_data_type(&output), return_field.data_type());
     }
 }
 
