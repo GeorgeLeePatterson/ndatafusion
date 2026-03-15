@@ -79,6 +79,21 @@
     - `linear_regression_fit`
 34. Grouped model fitting and grouped summary statistics should use `AggregateUDF` when they are
     naturally defined over many row observations rather than one row at a time.
+35. Aggregate implementations must not treat raw-row accumulation plus opaque binary state as the
+    default design pattern. If an exact mergeable sufficient-statistics state exists, it is the
+    required implementation strategy.
+36. Aggregate state should be typed, algebraic, and mergeable:
+    - prefer explicit `state_fields()` over opaque `Binary` state payloads
+    - keep dtype-specific execution behind a narrow runtime dispatch boundary
+    - materialize Arrow outputs only at `evaluate`
+    - isolate any fallback row-materialization strategy as an explicitly justified exception
+37. The first aggregate redesign target is the current grouped fit/statistics wave:
+    - `vector_covariance_agg`
+    - `vector_correlation_agg`
+    - `vector_pca_fit`
+    - `linear_regression_fit`
+    These should converge on typed sufficient-statistics state before more non-scalar surface area
+    is added.
 
 ## Cross-Layer Contract Model
 

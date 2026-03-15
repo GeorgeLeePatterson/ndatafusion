@@ -227,6 +227,16 @@ order:
     - the current registered catalog now exposes 82 scalar UDFs plus 4 aggregate UDFs
     - SQL integration coverage now exercises grouped aggregate queries for covariance,
       correlation, PCA fit, and linear regression fit
+28. `D-028`: The first aggregate wave now follows the durable non-scalar convention:
+    - `vector_covariance_agg`, `vector_correlation_agg`, and `vector_pca_fit` now use typed
+      sufficient-statistics state (`count`, `mean`, and scatter matrix) instead of raw-row
+      accumulation
+    - `linear_regression_fit` now uses typed normal-equation state (`count`, `sum_x`, `xtx`,
+      `xty`, `sum_y`, `sum_y2`, `add_intercept`) instead of raw-row accumulation
+    - aggregate `state_fields()` are now explicit Arrow-native typed fields rather than opaque
+      binary payloads
+    - Arrow output materialization remains scoped to `evaluate`
+    - local checks and coverage remain above the repository gate after the redesign
 
 ## Next
 
@@ -242,12 +252,12 @@ order:
    exists on crates.io.
 2. Decide which controversial or post-v1 capabilities are actually worth admitting after the
    current aggregate-enabled release checkpoint.
-3. A post-v1 performance pass to reduce fallback lift/assembly overhead where direct batch
-   delegation is still impossible.
+3. Continue the post-v1 performance pass after the aggregate redesign to reduce fallback
+   lift/assembly overhead where direct batch delegation is still impossible.
 
 ## Round Scope Lock
 
 1. This round starts local `ndatafusion` implementation after the upstream prerequisite releases.
-2. The next execution round should start `N-011`: plan the controversial or post-v1 surface, not
-   more non-controversial catalog expansion.
+2. The next execution round should start `N-011`: plan the next post-v1 surface now that the
+   first aggregate wave has been redesigned to typed sufficient-statistics state.
 3. Preserve the concept-first contract while release hardening and post-v1 planning continue.
