@@ -1,6 +1,6 @@
 # UDF Catalog
 
-Last updated: 2026-03-14
+Last updated: 2026-03-15
 
 This document is the current inventory of the `ndatafusion` SQL catalog.
 For small copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
@@ -16,6 +16,23 @@ sparse layouts produced by `ndarrow`, the numerical UDF can be called directly w
 - `Partial`: lower-layer support or direction exists, but `ndatafusion` does not yet expose a full,
   settled SQL-facing UDF surface.
 - `Missing`: not currently exposed by `ndatafusion`.
+
+## Alias Conventions
+
+`ndatafusion` keeps the explicit canonical names in the catalog, and also registers a small set of
+shorter SQL aliases for repetitive suffixes:
+
+- `l2_norm` -> `norm`
+- `last_axis` -> `last`
+- `variable` -> `var`
+- `least_squares` -> `ls`
+
+Examples:
+
+- `vector_norm` aliases `vector_l2_norm`
+- `tensor_norm_last` aliases `tensor_l2_norm_last_axis`
+- `tensor_var_sum_last` aliases `tensor_variable_sum_last_axis`
+- `matrix_qr_solve_ls` aliases `matrix_qr_solve_least_squares`
 
 ## Constructors
 
@@ -130,14 +147,38 @@ sparse layouts produced by `ndarrow`, the numerical UDF can be called directly w
 | `matrix_gmres` | Implemented | Dense GMRES solve with explicit `tolerance` and `max_iterations`. |
 | `linear_regression` | Implemented | Returns a struct containing `coefficients`, `fitted_values`, `residuals`, and `r_squared`. |
 
-## Roadmap Items 
+## Roadmap Items
 
-| Capability Family | Status | Notes |
-|---|---|---|
-| Complex-valued vector / matrix / tensor UDFs | Partial | Lower-layer Arrow contracts exist in `ndarrow` and `nabled`, but `ndatafusion` does not yet expose a stable SQL-facing complex catalog. |
-| Non-symmetric eigendecomposition with complex outputs | Missing | Blocked on choosing complex result contracts for SQL. |
-| Jacobian / gradient / Hessian | Missing | Generic `nabled` APIs are callback-driven; `ndatafusion` needs named-function registry or specialized built-ins instead of a direct closure-based surface. |
-| Generic optimization workflows | Missing | No SQL-natural contract is admitted yet. |
-| Stateful sparse factorization reuse and preconditioners | Missing | Requires object-carrying or stateful contracts beyond the current scalar-UDF-first design. |
-| Tensor decompositions (`CP`, `Tucker`, `TT`) | Missing | No admitted SQL-facing contract yet. |
-| UDAFs, window functions, table functions, and planner rewrites | Missing | Explicitly deferred; current implementation is scalar-UDF-first. |
+| Method Or Surface | `nabled` | `ndatafusion` | Notes |
+|---|---|---|---|
+| `vector_dot_hermitian` | Implemented | Missing | `nabled::arrow::vector::dot_hermitian` exists, but `ndatafusion` does not yet expose a complex vector SQL surface. |
+| `vector_batched_dot_hermitian` | Implemented | Missing | Row-wise Hermitian dot exists in `nabled`, but there is no complex batch vector catalog in `ndatafusion`. |
+| `vector_batched_l2_norm_complex` | Implemented | Missing | Complex row-wise vector norms exist in `nabled`; `ndatafusion` only exposes real-valued vector norms today. |
+| `vector_batched_cosine_similarity_complex` | Implemented | Missing | Complex cosine similarity exists in `nabled`; no SQL-facing complex vector contract is admitted yet. |
+| `vector_batched_normalize_complex` | Implemented | Missing | Complex batch normalization exists in `nabled`; `ndatafusion` has no complex vector UDFs yet. |
+| `matrix_matvec_complex`, `matrix_matmat_complex` | Implemented | Missing | Complex dense matrix products exist in `nabled::arrow::matrix`, but `ndatafusion` only exposes real-valued matrix products today. |
+| `matrix_column_means_complex`, `matrix_center_columns_complex` | Implemented | Missing | Complex statistics exist in `nabled::arrow::stats`, but `ndatafusion` does not yet expose a complex statistics surface. |
+| `matrix_covariance_complex`, `matrix_correlation_complex` | Implemented | Missing | Complex covariance and correlation are implemented in `nabled`, but `ndatafusion` currently stops at real-valued covariance/correlation. |
+| `matrix_pca_complex` | Implemented | Missing | `nabled::arrow::pca::compute_complex` exists, but `ndatafusion` does not yet define a SQL-facing complex PCA contract. |
+| `matrix_conjugate_gradient_complex`, `matrix_gmres_complex` | Implemented | Missing | Complex dense iterative solvers exist in `nabled::arrow::iterative`, but `ndatafusion` only exposes real-valued iterative solves today. |
+| `matrix_eigen_nonsymmetric_f32`, `matrix_eigen_nonsymmetric_f64` | Implemented | Missing | `nabled::arrow::eigen::nonsymmetric_f32` and `nonsymmetric_f64` exist and return complex outputs; `ndatafusion` has not yet settled the SQL result contract for those complex results. |
+| `matrix_eigen_nonsymmetric_bi_f32`, `matrix_eigen_nonsymmetric_bi_f64` | Implemented | Missing | Bi-eigen variants with left and right eigenvectors exist in `nabled`, but require a richer complex struct contract in `ndatafusion`. |
+| `matrix_eigen_nonsymmetric_complex` | Implemented | Missing | Complex nonsymmetric eigendecomposition exists in `nabled::arrow::eigen`, but is not yet exposed in `ndatafusion`. |
+| `matrix_schur_complex`, `matrix_polar_complex` | Implemented | Missing | Complex Schur and polar exist in `nabled`, but `ndatafusion` only exposes the current real-valued SQL contract. |
+| `matrix_exp_complex`, `matrix_exp_eigen_complex` | Implemented | Missing | Complex matrix exponentials exist in `nabled::arrow::matrix_functions`; `ndatafusion` has not yet admitted complex matrix outputs. |
+| `matrix_log_eigen_complex`, `matrix_log_svd_complex` | Implemented | Missing | Complex matrix logarithms exist in `nabled`, but `ndatafusion` does not yet expose them. |
+| `matrix_power_complex`, `matrix_sign_complex` | Implemented | Missing | Complex matrix power and sign exist in `nabled`; `ndatafusion` currently exposes only real-valued variants. |
+| `tensor_l2_norm_last_axis_complex`, `tensor_normalize_last_axis_complex` | Implemented | Missing | Complex fixed-shape tensor norm and normalization exist in `nabled::arrow::tensor`, but `ndatafusion` does not yet expose a complex tensor surface. |
+| `tensor_variable_l2_norm_last_axis_complex`, `tensor_variable_normalize_last_axis_complex` | Implemented | Missing | Complex variable-shape tensor norm and normalization exist in `nabled`, but `ndatafusion` does not yet expose them. |
+| `tensor_cp_als3`, `tensor_cp_als_nd` | Implemented | Missing | CP decomposition and related reporting/reconstruction helpers exist in `nabled::arrow::tensor`, but `ndatafusion` has not yet admitted a SQL-facing decomposition contract. |
+| `tensor_hosvd_nd`, `tensor_hooi_nd` | Implemented | Missing | Higher-order SVD and HOOI exist in `nabled`, but there is no settled `ndatafusion` SQL contract yet. |
+| `tensor_tucker_project`, `tensor_tucker_expand` | Implemented | Missing | Tucker projection and expansion exist in `nabled::arrow::tensor`, but are not yet exposed in `ndatafusion`. |
+| `tensor_tt_svd`, `tensor_tt_orthogonalize_left`, `tensor_tt_orthogonalize_right`, `tensor_tt_round` | Implemented | Missing | Tensor-train factorization and orthogonalization exist in `nabled`, but `ndatafusion` has no SQL-facing TT contract yet. |
+| `tensor_tt_inner`, `tensor_tt_norm`, `tensor_tt_add`, `tensor_tt_hadamard`, `tensor_tt_hadamard_round`, `tensor_tt_svd_reconstruct` | Implemented | Missing | Tensor-train algebra and reconstruction helpers exist in `nabled`; `ndatafusion` does not yet expose them. |
+| `solve_sylvester`, `solve_sylvester_mixed_f64`, `solve_sylvester_complex` | Implemented | Missing | Sylvester solvers exist in `nabled-linalg`, but `ndatafusion` does not yet expose a matrix-equation SQL surface. |
+| `gradient_descent_complex`, `adam_complex`, `momentum_descent_complex`, `backtracking_line_search_complex` | Implemented | Missing | Complex optimization helpers exist in `nabled`, but they are not yet shaped into a SQL-natural `ndatafusion` contract. |
+| `sparse_lu_factor_csr_extension`, `sparse_lu_solve_with_factorization_csr_extension`, `sparse_lu_solve_multiple_with_factorization_csr_extension` | Implemented | Missing | Stateful sparse LU factorization and reuse exist in `nabled::arrow::sparse`, but `ndatafusion` currently avoids object-carrying sparse state contracts. |
+| `jacobi_preconditioner_csr_extension`, `apply_jacobi_preconditioner` | Implemented | Missing | Jacobi preconditioner construction and application exist in `nabled`, but there is no SQL-facing stateful contract in `ndatafusion` yet. |
+| `ilut_factor_csr_extension`, `iluk_factor_csr_extension` | Implemented | Missing | ILUT and ILUK factorization builders exist in `nabled::arrow::sparse`, but `ndatafusion` does not yet expose sparse factorization objects. |
+| `jacobian`, `gradient`, `hessian` | Implemented | Missing | Generic `nabled` APIs are callback-driven; `ndatafusion` needs named-function registry or specialized built-ins instead of a direct closure-based SQL surface. |
+| UDAFs, window functions, table functions, and planner rewrites | N/A | Missing | Explicitly deferred; the current `ndatafusion` implementation is scalar-UDF-first. |

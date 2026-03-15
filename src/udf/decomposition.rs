@@ -2560,7 +2560,10 @@ pub fn matrix_svd_null_space_udf() -> Arc<ScalarUDF> {
 
 #[must_use]
 pub fn matrix_qr_solve_least_squares_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(MatrixQrSolveLeastSquares::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(MatrixQrSolveLeastSquares::new())
+            .with_aliases(["matrix_qr_solve_ls"]),
+    )
 }
 
 #[must_use]

@@ -1104,22 +1104,30 @@ impl ScalarUDFImpl for TensorVariableBatchedDotLastAxis {
 
 #[must_use]
 pub fn tensor_sum_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorSumLastAxis::new()))
+    Arc::new(ScalarUDF::new_from_impl(TensorSumLastAxis::new()).with_aliases(["tensor_sum_last"]))
 }
 
 #[must_use]
 pub fn tensor_l2_norm_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorL2NormLastAxis::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorL2NormLastAxis::new()).with_aliases(["tensor_norm_last"]),
+    )
 }
 
 #[must_use]
 pub fn tensor_normalize_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorNormalizeLastAxis::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorNormalizeLastAxis::new())
+            .with_aliases(["tensor_normalize_last"]),
+    )
 }
 
 #[must_use]
 pub fn tensor_batched_dot_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorBatchedDotLastAxis::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorBatchedDotLastAxis::new())
+            .with_aliases(["tensor_batched_dot_last"]),
+    )
 }
 
 #[must_use]
@@ -1139,20 +1147,32 @@ pub fn tensor_contract_axes_udf() -> Arc<ScalarUDF> {
 
 #[must_use]
 pub fn tensor_variable_sum_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorVariableSumLastAxis::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorVariableSumLastAxis::new())
+            .with_aliases(["tensor_var_sum_last"]),
+    )
 }
 
 #[must_use]
 pub fn tensor_variable_l2_norm_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorVariableL2NormLastAxis::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorVariableL2NormLastAxis::new())
+            .with_aliases(["tensor_var_norm_last"]),
+    )
 }
 
 #[must_use]
 pub fn tensor_variable_normalize_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorVariableNormalizeLastAxis::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorVariableNormalizeLastAxis::new())
+            .with_aliases(["tensor_var_normalize_last"]),
+    )
 }
 
 #[must_use]
 pub fn tensor_variable_batched_dot_last_axis_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(TensorVariableBatchedDotLastAxis::new()))
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorVariableBatchedDotLastAxis::new())
+            .with_aliases(["tensor_var_batched_dot_last"]),
+    )
 }

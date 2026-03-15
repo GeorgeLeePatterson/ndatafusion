@@ -344,7 +344,7 @@ impl ScalarUDFImpl for VectorNormalize {
 
 #[must_use]
 pub fn vector_l2_norm_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(VectorL2Norm::new()))
+    Arc::new(ScalarUDF::new_from_impl(VectorL2Norm::new()).with_aliases(["vector_norm"]))
 }
 
 #[must_use]

@@ -137,10 +137,22 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
 
 #[cfg(test)]
 mod tests {
-    use super::all_default_functions;
+    use super::{
+        all_default_functions, make_variable_tensor_udf, matrix_qr_solve_least_squares_udf,
+        tensor_l2_norm_last_axis_udf, tensor_variable_sum_last_axis_udf, vector_l2_norm_udf,
+    };
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
         assert_eq!(all_default_functions().len(), 78);
+    }
+
+    #[test]
+    fn representative_udfs_expose_expected_aliases() {
+        assert_eq!(vector_l2_norm_udf().aliases(), ["vector_norm"]);
+        assert_eq!(make_variable_tensor_udf().aliases(), ["make_var_tensor"]);
+        assert_eq!(tensor_l2_norm_last_axis_udf().aliases(), ["tensor_norm_last"]);
+        assert_eq!(tensor_variable_sum_last_axis_udf().aliases(), ["tensor_var_sum_last"]);
+        assert_eq!(matrix_qr_solve_least_squares_udf().aliases(), ["matrix_qr_solve_ls"],);
     }
 }

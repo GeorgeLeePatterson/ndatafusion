@@ -66,12 +66,26 @@
 //!
 //! For the complete SQL function inventory and notes on result contracts, see `CATALOG.md` in the
 //! repository root. For small copy-paste query examples, see `EXERCISES.md`.
+//!
+//! ## Features
+//!
+//! Feature forwarding follows `nabled` directly:
+//!
+//! * `blas`
+//! * `lapack-provider`
+//! * `openblas-system`
+//! * `openblas-static`
+//! * `netlib-system`
+//! * `netlib-static`
+//! * `magma-system`
+//! * `accelerator-rayon`
+//! * `accelerator-wgpu`
 
 pub mod error;
 pub mod functions;
 pub(crate) mod metadata;
 pub mod register;
-pub mod signatures;
+pub(crate) mod signatures;
 pub mod udf;
 pub mod udfs;
 

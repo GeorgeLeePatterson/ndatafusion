@@ -57,7 +57,9 @@ mod tests {
 
         register_all(&mut registry).expect("empty udf catalog should still register cleanly");
 
-        assert_eq!(registry.udfs().len(), crate::udfs::all_default_functions().len());
+        assert!(registry.udfs().len() >= crate::udfs::all_default_functions().len());
+        assert!(registry.udfs().contains("vector_l2_norm"));
+        assert!(registry.udfs().contains("matrix_qr_solve_least_squares"));
     }
 
     #[test]

@@ -184,7 +184,9 @@ fn register_all_accepts_the_current_catalog() {
     ndatafusion::register_all(&mut registry)
         .expect("the current scaffold should register successfully");
 
-    assert_eq!(registry.udfs().len(), ndatafusion::udfs::all_default_functions().len());
+    assert!(registry.udfs().len() >= ndatafusion::udfs::all_default_functions().len());
+    assert!(registry.udfs().contains("vector_l2_norm"));
+    assert!(registry.udfs().contains("matrix_qr_solve_least_squares"));
 }
 
 #[tokio::test]
@@ -214,6 +216,103 @@ async fn sql_literal_constructor_pipeline_executes() -> Result<()> {
     assert_close(float64_column(&batches[0], 0).value(0), 12.0);
     assert_close(float64_column(&batches[0], 1).value(0), 1.0);
     assert_close(float64_column(&batches[0], 2).value(0), 36.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_alias_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let embedding = float32_fixed_size_list_array(vec![vec![3.0_f32, 4.0]]);
+    let rhs = float32_fixed_size_list_array(vec![vec![5.0_f32, 6.0]]);
+    let (matrix_field, matrix_storage) = ndarrow::arrayd_to_fixed_shape_tensor(
+        "matrix",
+        Array3::from_shape_vec((1, 2, 2), vec![1.0_f32, 0.0, 0.0, 1.0])
+            .expect("matrix batch")
+            .into_dyn(),
+    )
+    .expect("matrix tensor batch");
+    let (tensor_field, tensor_storage) = ndarrow::arrayd_to_fixed_shape_tensor(
+        "tensor_fixed",
+        Array3::from_shape_vec((1, 2, 2), vec![3.0_f32, 4.0, 5.0, 12.0])
+            .expect("fixed tensor batch")
+            .into_dyn(),
+    )
+    .expect("fixed tensor batch");
+    let (variable_field, variable_storage) = ndarrow::arrays_to_variable_shape_tensor(
+        "tensor_var",
+        vec![
+            Array2::from_shape_vec((2, 2), vec![1.0_f32, 2.0, 3.0, 4.0])
+                .expect("variable tensor row")
+                .into_dyn(),
+        ],
+        Some(vec![Some(2), Some(2)]),
+    )
+    .expect("variable tensor batch");
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("embedding", embedding.data_type().clone(), false),
+        matrix_field.as_ref().clone(),
+        Field::new("rhs", rhs.data_type().clone(), false),
+        tensor_field.as_ref().clone(),
+        variable_field.as_ref().clone(),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(embedding) as ArrayRef,
+        Arc::new(matrix_storage) as ArrayRef,
+        Arc::new(rhs) as ArrayRef,
+        Arc::new(tensor_storage) as ArrayRef,
+        Arc::new(variable_storage) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("alias_inputs", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                vector_norm(embedding) AS vector_norm,
+                matrix_qr_solve_ls(matrix, rhs) AS qr_ls,
+                tensor_norm_last(tensor_fixed) AS tensor_norms,
+                tensor_var_sum_last(tensor_var) AS tensor_var_sum
+             FROM alias_inputs",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_close32(float32_column(&batches[0], 0).value(0), 5.0);
+
+    let qr_solution =
+        batches[0].column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("qr solution");
+    let qr_solution =
+        ndarrow::fixed_size_list_as_array2::<Float32Type>(qr_solution).expect("qr solution");
+    assert_close32(qr_solution[[0, 0]], 5.0);
+    assert_close32(qr_solution[[0, 1]], 6.0);
+
+    let tensor_norm_field = batches[0].schema().field(2).clone();
+    let tensor_norms =
+        batches[0].column(2).as_any().downcast_ref::<FixedSizeListArray>().expect("tensor norms");
+    let tensor_norms =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(&tensor_norm_field, tensor_norms)
+            .expect("tensor norms")
+            .into_dimensionality::<Ix2>()
+            .expect("rank-2 tensor norms");
+    assert_close32(tensor_norms[[0, 0]], 5.0);
+    assert_close32(tensor_norms[[0, 1]], 13.0);
+
+    let tensor_var_field = batches[0].schema().field(3).clone();
+    let mut tensor_rows = ndarrow::variable_shape_tensor_iter::<Float32Type>(
+        &tensor_var_field,
+        struct_column(&batches[0], 3),
+    )
+    .expect("variable-shape tensor output");
+    let (_, tensor_var_sum) = tensor_rows.next().expect("row0").expect("row0 tensor");
+    let tensor_var_sum = tensor_var_sum.into_dimensionality::<Ix1>().expect("rank-1 tensor");
+    assert_close32(tensor_var_sum[[0]], 3.0);
+    assert_close32(tensor_var_sum[[1]], 7.0);
     Ok(())
 }
 

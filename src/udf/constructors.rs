@@ -1055,7 +1055,7 @@ pub fn make_tensor_udf() -> Arc<ScalarUDF> { Arc::new(ScalarUDF::new_from_impl(M
 
 #[must_use]
 pub fn make_variable_tensor_udf() -> Arc<ScalarUDF> {
-    Arc::new(ScalarUDF::new_from_impl(MakeVariableTensor::new()))
+    Arc::new(ScalarUDF::new_from_impl(MakeVariableTensor::new()).with_aliases(["make_var_tensor"]))
 }
 
 #[must_use]
