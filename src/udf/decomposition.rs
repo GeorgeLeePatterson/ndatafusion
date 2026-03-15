@@ -14,6 +14,7 @@ use ndarray::{Array2, Array3, Axis};
 use ndarrow::NdarrowElement;
 
 use super::common::{
+    complex_fixed_shape_tensor_array_from_flat_rows, complex_fixed_shape_tensor_view3,
     expect_fixed_size_list_arg, expect_real_scalar_arg, expect_real_scalar_argument,
     expect_usize_scalar_arg, expect_usize_scalar_argument, fixed_shape_tensor_view3,
     fixed_size_list_array_from_flat_rows, fixed_size_list_view2, nullable_or,
@@ -22,8 +23,9 @@ use super::common::{
 use super::docs::decomposition_doc;
 use crate::error::exec_error;
 use crate::metadata::{
-    fixed_shape_tensor_field, parse_matrix_batch_field, parse_vector_field, scalar_field,
-    struct_field, variable_shape_tensor_field, vector_field,
+    complex_fixed_shape_tensor_field, fixed_shape_tensor_field, parse_complex_matrix_batch_field,
+    parse_matrix_batch_field, parse_vector_field, scalar_field, struct_field,
+    variable_shape_tensor_field, vector_field,
 };
 use crate::signatures::{
     ScalarCoercion, any_signature, coerce_scalar_arguments, named_user_defined_signature,
@@ -44,6 +46,23 @@ fn square_matrix_shape(
         ));
     }
     Ok((matrix.value_type, matrix.rows, matrix.cols, nullable_or(args.arg_fields)))
+}
+
+fn complex_square_matrix_shape(
+    args: &ReturnFieldArgs<'_>,
+    function_name: &str,
+) -> Result<(usize, bool)> {
+    let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], function_name, 1)?;
+    if matrix.rows != matrix.cols {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "{function_name} requires square matrices, found ({}, {})",
+                matrix.rows, matrix.cols
+            ),
+        ));
+    }
+    Ok((matrix.rows, nullable_or(args.arg_fields)))
 }
 
 fn tensor_column<T>(
@@ -176,6 +195,18 @@ fn double_tensor_struct_field(
 ) -> Result<FieldRef> {
     let first = fixed_shape_tensor_field(first_name, value_type, &shape, false)?;
     let second = fixed_shape_tensor_field(second_name, value_type, &shape, false)?;
+    Ok(struct_field(name, vec![first.as_ref().clone(), second.as_ref().clone()], nullable))
+}
+
+fn complex_double_tensor_struct_field(
+    name: &str,
+    first_name: &str,
+    second_name: &str,
+    shape: [usize; 2],
+    nullable: bool,
+) -> Result<FieldRef> {
+    let first = complex_fixed_shape_tensor_field(first_name, &shape, false)?;
+    let second = complex_fixed_shape_tensor_field(second_name, &shape, false)?;
     Ok(struct_field(name, vec![first.as_ref().clone(), second.as_ref().clone()], nullable))
 }
 
@@ -574,6 +605,45 @@ where
     Ok(ColumnarValue::Array(Arc::new(StructArray::new(
         vec![first_field, second_field].into(),
         vec![first_array, second_array],
+        None,
+    ))))
+}
+
+fn invoke_complex_matrix_double_tensor_struct_output<E>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    first_name: &str,
+    second_name: &str,
+    shape: [usize; 2],
+    op: impl Fn(
+        &ndarray::ArrayView2<'_, num_complex::Complex64>,
+    ) -> std::result::Result<
+        (Array2<num_complex::Complex64>, Array2<num_complex::Complex64>),
+        E,
+    >,
+) -> Result<ColumnarValue>
+where
+    E: std::fmt::Display,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], matrices, function_name)?;
+    let batch = matrix_view.len_of(Axis(0));
+    let mut first_values = Vec::with_capacity(batch * shape[0] * shape[1]);
+    let mut second_values = Vec::with_capacity(batch * shape[0] * shape[1]);
+    for row in 0..batch {
+        let (first, second) = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
+        first_values.extend(first.iter().copied());
+        second_values.extend(second.iter().copied());
+    }
+    let (first_field, first_array) =
+        complex_fixed_shape_tensor_array_from_flat_rows(first_name, batch, &shape, first_values)?;
+    let (second_field, second_array) =
+        complex_fixed_shape_tensor_array_from_flat_rows(second_name, batch, &shape, second_values)?;
+    Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+        vec![first_field, second_field].into(),
+        vec![Arc::new(first_array), Arc::new(second_array)],
         None,
     ))))
 }
@@ -2364,6 +2434,74 @@ struct MatrixPolar {
     signature: Signature,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixSchurComplex {
+    signature: Signature,
+}
+
+impl MatrixSchurComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixSchurComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_schur_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let (dimension, nullable) = complex_square_matrix_shape(&args, self.name())?;
+        complex_double_tensor_struct_field(self.name(), "q", "t", [dimension, dimension], nullable)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        invoke_complex_matrix_double_tensor_struct_output(
+            &args,
+            self.name(),
+            "q",
+            "t",
+            [matrix.rows, matrix.cols],
+            |view| {
+                nabled::linalg::schur::compute_schur_complex_view(view)
+                    .map(|result| (result.q, result.t))
+            },
+        )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            decomposition_doc(
+                "Compute a complex Schur decomposition for each complex square matrix in the \
+                 batch.",
+                "matrix_schur_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix",
+                "Complex square matrix batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
 impl MatrixPolar {
     fn new() -> Self { Self { signature: any_signature(1) } }
 }
@@ -2431,6 +2569,74 @@ impl ScalarUDFImpl for MatrixPolar {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixPolarComplex {
+    signature: Signature,
+}
+
+impl MatrixPolarComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixPolarComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_polar_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let (dimension, nullable) = complex_square_matrix_shape(&args, self.name())?;
+        complex_double_tensor_struct_field(self.name(), "u", "p", [dimension, dimension], nullable)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        invoke_complex_matrix_double_tensor_struct_output(
+            &args,
+            self.name(),
+            "u",
+            "p",
+            [matrix.rows, matrix.cols],
+            |view| {
+                nabled::linalg::polar::compute_polar_complex_view(view)
+                    .map(|result| (result.u, result.p))
+            },
+        )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            decomposition_doc(
+                "Compute a complex polar decomposition for each complex square matrix in the \
+                 batch.",
+                "matrix_polar_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix",
+                "Complex square matrix batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -2660,8 +2866,18 @@ pub fn matrix_schur_udf() -> Arc<ScalarUDF> {
 }
 
 #[must_use]
+pub fn matrix_schur_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixSchurComplex::new()))
+}
+
+#[must_use]
 pub fn matrix_polar_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixPolar::new()))
+}
+
+#[must_use]
+pub fn matrix_polar_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixPolarComplex::new()))
 }
 
 #[must_use]

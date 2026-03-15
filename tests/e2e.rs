@@ -188,6 +188,64 @@ fn assert_two_tensor_struct_column(batch: &RecordBatch, index: usize, min: f64, 
     assert_close(diagonal.into_iter().fold(f64::NEG_INFINITY, f64::max), max);
 }
 
+fn assert_complex_matrix_column(batch: &RecordBatch, index: usize, expected: [[Complex64; 2]; 2]) {
+    let field = batch.schema().field(index).clone();
+    let output = batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("expected complex fixed-shape tensor");
+    let output = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&field, output)
+        .expect("complex matrix output")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 complex matrix output");
+    for i in 0..2 {
+        for j in 0..2 {
+            assert_close(output[[0, i, j]].re, expected[i][j].re);
+            assert_close(output[[0, i, j]].im, expected[i][j].im);
+        }
+    }
+}
+
+fn assert_two_complex_tensor_struct_column(
+    batch: &RecordBatch,
+    index: usize,
+    first_expected: [[Complex64; 2]; 2],
+    second_expected: [[Complex64; 2]; 2],
+) {
+    let field = batch.schema().field(index).clone();
+    let DataType::Struct(fields) = field.data_type() else {
+        panic!("expected complex two-tensor struct output");
+    };
+    let output = struct_column(batch, index);
+    let first = output
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("first complex tensor");
+    let first = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&fields[0], first)
+        .expect("first complex tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 first complex tensor");
+    let second = output
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("second complex tensor");
+    let second = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&fields[1], second)
+        .expect("second complex tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 second complex tensor");
+    for i in 0..2 {
+        for j in 0..2 {
+            assert_close(first[[0, i, j]].re, first_expected[i][j].re);
+            assert_close(first[[0, i, j]].im, first_expected[i][j].im);
+            assert_close(second[[0, i, j]].re, second_expected[i][j].re);
+            assert_close(second[[0, i, j]].im, second_expected[i][j].im);
+        }
+    }
+}
+
 fn assert_orthogonal_matrix_column(batch: &RecordBatch, index: usize) {
     let schema = batch.schema();
     let field = schema.field(index);
@@ -265,6 +323,19 @@ fn direct_complex_matrix_batch() -> Result<RecordBatch> {
     ])?)
 }
 
+fn direct_complex_spectral_batch() -> Result<RecordBatch> {
+    let (spectral_field, spectral_matrix) = complex64_matrix_batch("spectral_matrix", [[
+        [Complex64::new(4.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(9.0, 0.0)],
+    ]]);
+    let schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false), spectral_field]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(spectral_matrix) as ArrayRef,
+    ])?)
+}
+
 fn assert_direct_complex_matrix_results(batch: &RecordBatch) {
     assert_eq!(batch.num_rows(), 2);
     assert_eq!(int64_column(batch, 0).values().as_ref(), &[1, 2]);
@@ -313,6 +384,41 @@ fn assert_direct_complex_matrix_results(batch: &RecordBatch) {
     assert_close(gmres[[0, 1]].re, 2.0);
     assert_close(gmres[[1, 0]].re, 2.0);
     assert_close(gmres[[1, 1]].re, 2.0);
+}
+
+fn assert_direct_complex_spectral_results(batch: &RecordBatch) {
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(int64_column(batch, 0).value(0), 1);
+
+    let identity = [[Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)], [
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ]];
+    let spectral = [[Complex64::new(4.0, 0.0), Complex64::new(0.0, 0.0)], [
+        Complex64::new(0.0, 0.0),
+        Complex64::new(9.0, 0.0),
+    ]];
+    let exp_values = [[Complex64::new(4.0_f64.exp(), 0.0), Complex64::new(0.0, 0.0)], [
+        Complex64::new(0.0, 0.0),
+        Complex64::new(9.0_f64.exp(), 0.0),
+    ]];
+    let log_values = [[Complex64::new(4.0_f64.ln(), 0.0), Complex64::new(0.0, 0.0)], [
+        Complex64::new(0.0, 0.0),
+        Complex64::new(9.0_f64.ln(), 0.0),
+    ]];
+    let power_values = [[Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)], [
+        Complex64::new(0.0, 0.0),
+        Complex64::new(3.0, 0.0),
+    ]];
+
+    assert_two_complex_tensor_struct_column(batch, 1, identity, spectral);
+    assert_two_complex_tensor_struct_column(batch, 2, identity, spectral);
+    assert_complex_matrix_column(batch, 3, exp_values);
+    assert_complex_matrix_column(batch, 4, exp_values);
+    assert_complex_matrix_column(batch, 5, log_values);
+    assert_complex_matrix_column(batch, 6, log_values);
+    assert_complex_matrix_column(batch, 7, power_values);
+    assert_complex_matrix_column(batch, 8, identity);
 }
 
 fn direct_complex_tensor_batch() -> Result<RecordBatch> {
@@ -805,6 +911,40 @@ async fn sql_direct_complex_matrix_queries_execute() -> Result<()> {
 
     assert_eq!(batches.len(), 1);
     assert_direct_complex_matrix_results(&batches[0]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_complex_spectral_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    drop(ctx.register_batch("direct_complex_spectral", direct_complex_spectral_batch()?)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                matrix_schur_complex(spectral_matrix) AS schur,
+                matrix_polar_complex(spectral_matrix) AS polar,
+                matrix_exp_complex(
+                    spectral_matrix,
+                    max_terms => 64,
+                    tolerance => 1e-14
+                ) AS exp_series,
+                matrix_exp_eigen_complex(spectral_matrix) AS exp_eigen,
+                matrix_log_eigen_complex(spectral_matrix) AS log_eigen,
+                matrix_log_svd_complex(spectral_matrix) AS log_svd,
+                matrix_power_complex(spectral_matrix, power => 0.5) AS power_half,
+                matrix_sign_complex(spectral_matrix) AS sign
+             FROM direct_complex_spectral",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_direct_complex_spectral_results(&batches[0]);
     Ok(())
 }
 

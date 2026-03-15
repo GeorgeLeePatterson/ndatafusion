@@ -94,9 +94,19 @@ top of the released upstream contracts.
     - `tensor_normalize_last_axis_complex`
     - `tensor_variable_l2_norm_last_axis_complex`
     - `tensor_variable_normalize_last_axis_complex`
-31. The registered catalog now spans 94 scalar UDFs plus 4 aggregate UDFs, with named-argument
+31. The current scalar catalog now also covers the richer complex decomposition and matrix-function
+    slice:
+    - `matrix_schur_complex`
+    - `matrix_polar_complex`
+    - `matrix_exp_complex`
+    - `matrix_exp_eigen_complex`
+    - `matrix_log_eigen_complex`
+    - `matrix_log_svd_complex`
+    - `matrix_power_complex`
+    - `matrix_sign_complex`
+32. The registered catalog now spans 102 scalar UDFs plus 4 aggregate UDFs, with named-argument
     support for selected constructors, scalar control arguments, their complex iterative
-    counterparts, and `linear_regression_fit`.
+    counterparts, the configurable complex matrix-function slice, and `linear_regression_fit`.
 
 ## Current Repository Reality
 

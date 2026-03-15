@@ -66,7 +66,8 @@
 //!
 //! - constructors for canonical numerical values
 //! - dense vector operations, including the current complex-vector subset
-//! - complex dense matrix products, statistics, and iterative solvers
+//! - complex dense matrix products, statistics, iterative solvers, matrix functions, and the
+//!   current complex Schur/polar subset
 //! - dense matrix operations, decompositions, and direct solvers
 //! - sparse CSR operations
 //! - fixed-shape and variable-shape tensor operations, including the current complex tensor subset

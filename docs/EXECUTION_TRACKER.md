@@ -252,11 +252,22 @@ order:
     - the registered catalog now exposes 94 scalar UDFs plus 4 aggregate UDFs
     - direct SQL integration coverage now exercises canonical complex vector, matrix, and tensor
       inputs without `make_*`
+30. `D-030`: `N-011` has advanced on the richer complex decomposition and matrix-function slice:
+    - `matrix_schur_complex` and `matrix_polar_complex` now exist over canonical complex square
+      matrix batches and return complex paired-tensor struct contracts matching the real-valued
+      Schur/polar surface
+    - `matrix_exp_complex`, `matrix_exp_eigen_complex`, `matrix_log_eigen_complex`,
+      `matrix_log_svd_complex`, `matrix_power_complex`, and `matrix_sign_complex` now exist over
+      canonical complex square matrix batches
+    - direct SQL integration coverage now exercises canonical complex-matrix spectral and
+      matrix-function inputs without `make_*`
+    - the registered catalog now exposes 102 scalar UDFs plus 4 aggregate UDFs
 
 ## Next
 
 1. `N-011` (`Layer 3`, `ndatafusion`): Plan and implement the next post-v1 surface explicitly:
-   - richer complex decomposition and matrix-function result contracts,
+   - richer complex spectral contracts beyond the current Schur/polar and matrix-function slice,
+   - complex PCA and other remaining admitted complex ML/stat surfaces,
    - callback-driven differentiation / optimization,
    - stateful sparse factorization reuse,
    - second-wave aggregate, window, table-function, and planner surfaces.

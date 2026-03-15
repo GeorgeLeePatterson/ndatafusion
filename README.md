@@ -83,7 +83,7 @@ For the user-facing SQL catalog, see [CATALOG.md](https://github.com/GeorgeLeePa
 For quick copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
 For runnable examples, see `cargo run --example hello_sql`, `cargo run --example direct_arrow_vectors`, and `cargo run --example pca_pipeline`.
 
-`ndatafusion` registers a direct batch-native catalog across 94 scalar UDFs and 4 aggregate UDFs:
+`ndatafusion` registers a direct batch-native catalog across 102 scalar UDFs and 4 aggregate UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
@@ -94,12 +94,16 @@ For runnable examples, see `cargo run --example hello_sql`, `cargo run --example
 4. dense matrix matvec, batched matmul, lower/upper triangular solves, and
    LU/Cholesky/QR least-squares solves
 5. struct-valued LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD,
-   tolerance-thresholded SVD, symmetric/generalized eigen, Schur, polar, and PCA workflows
+   tolerance-thresholded SVD, symmetric/generalized eigen, Schur, polar, their current complex
+   Schur/polar counterparts, and PCA workflows
 6. matrix inverse, determinant, log-determinant, QR condition number / reconstruction,
    SVD null-space / pseudo-inverse / condition number / rank / reconstruction,
    non-symmetric matrix balancing, Gram-Schmidt variants, zero-config matrix functions
    (`matrix_exp_eigen`, `matrix_log_eigen`, `matrix_log_svd`, `matrix_sign`), and configurable
-   matrix functions (`matrix_exp`, `matrix_log_taylor`, `matrix_power`)
+   matrix functions (`matrix_exp`, `matrix_log_taylor`, `matrix_power`) plus the current complex
+   matrix-function slice (`matrix_exp_complex`, `matrix_exp_eigen_complex`,
+   `matrix_log_eigen_complex`, `matrix_log_svd_complex`, `matrix_power_complex`,
+   `matrix_sign_complex`)
 7. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
 8. fixed-shape tensor last-axis reductions, normalization, batched products, row-wise
    permutation/contraction, variable-shape tensor last-axis workflows, and the first complex

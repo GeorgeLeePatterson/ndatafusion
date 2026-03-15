@@ -45,8 +45,10 @@ includes:
 - `make_variable_tensor`
 - `make_csr_matrix_batch`
 - `matrix_exp`
+- `matrix_exp_complex`
 - `matrix_log_taylor`
 - `matrix_power`
+- `matrix_power_complex`
 - `matrix_conjugate_gradient`
 - `matrix_gmres`
 - `matrix_conjugate_gradient_complex`
@@ -131,6 +133,17 @@ order-sensitive.
 | `matrix_conjugate_gradient_complex` | Implemented | Complex dense iterative solve with explicit `tolerance` and `max_iterations`. |
 | `matrix_gmres_complex` | Implemented | Complex dense GMRES solve with explicit `tolerance` and `max_iterations`. |
 
+## Complex Matrix Functions
+
+| UDF | Status | Notes |
+|---|---|---|
+| `matrix_exp_complex` | Implemented | Configurable complex matrix exponential with explicit `max_terms` and `tolerance`. |
+| `matrix_exp_eigen_complex` | Implemented | Zero-config eigen-based complex matrix exponential path. |
+| `matrix_log_eigen_complex` | Implemented | Zero-config eigen-based complex matrix logarithm path. |
+| `matrix_log_svd_complex` | Implemented | Zero-config SVD-based complex matrix logarithm path. |
+| `matrix_power_complex` | Implemented | Complex matrix power with explicit scalar exponent. |
+| `matrix_sign_complex` | Implemented | Complex matrix sign function. |
+
 ## Decompositions And Spectral Helpers
 
 | UDF | Status | Notes |
@@ -159,6 +172,13 @@ order-sensitive.
 | `matrix_polar` | Implemented | Returns a paired-matrix polar-decomposition struct result. |
 | `matrix_gram_schmidt` | Implemented | Modified Gram-Schmidt orthogonalization helper. |
 | `matrix_gram_schmidt_classic` | Implemented | Classical Gram-Schmidt orthogonalization helper. |
+
+## Complex Decompositions
+
+| UDF | Status | Notes |
+|---|---|---|
+| `matrix_schur_complex` | Implemented | Returns a complex paired-matrix Schur struct result with `q` and `t`. |
+| `matrix_polar_complex` | Implemented | Returns a complex paired-matrix polar-decomposition struct result with `u` and `p`. |
 
 ## Sparse
 
@@ -227,10 +247,6 @@ order-sensitive.
 | `matrix_eigen_nonsymmetric_f32`, `matrix_eigen_nonsymmetric_f64` | Implemented | Missing | `nabled::arrow::eigen::nonsymmetric_f32` and `nonsymmetric_f64` exist and return complex outputs; `ndatafusion` has not yet settled the SQL result contract for those complex results. |
 | `matrix_eigen_nonsymmetric_bi_f32`, `matrix_eigen_nonsymmetric_bi_f64` | Implemented | Missing | Bi-eigen variants with left and right eigenvectors exist in `nabled`, but require a richer complex struct contract in `ndatafusion`. |
 | `matrix_eigen_nonsymmetric_complex` | Implemented | Missing | Complex nonsymmetric eigendecomposition exists in `nabled::arrow::eigen`, but is not yet exposed in `ndatafusion`. |
-| `matrix_schur_complex`, `matrix_polar_complex` | Implemented | Missing | Complex Schur and polar exist in `nabled`, but `ndatafusion` only exposes the current real-valued SQL contract. |
-| `matrix_exp_complex`, `matrix_exp_eigen_complex` | Implemented | Missing | Complex matrix exponentials exist in `nabled::arrow::matrix_functions`; `ndatafusion` has not yet admitted complex matrix outputs. |
-| `matrix_log_eigen_complex`, `matrix_log_svd_complex` | Implemented | Missing | Complex matrix logarithms exist in `nabled`, but `ndatafusion` does not yet expose them. |
-| `matrix_power_complex`, `matrix_sign_complex` | Implemented | Missing | Complex matrix power and sign exist in `nabled`; `ndatafusion` currently exposes only real-valued variants. |
 | `tensor_cp_als3`, `tensor_cp_als_nd` | Implemented | Missing | CP decomposition and related reporting/reconstruction helpers exist in `nabled::arrow::tensor`, but `ndatafusion` has not yet admitted a SQL-facing decomposition contract. |
 | `tensor_hosvd_nd`, `tensor_hooi_nd` | Implemented | Missing | Higher-order SVD and HOOI exist in `nabled`, but there is no settled `ndatafusion` SQL contract yet. |
 | `tensor_tucker_project`, `tensor_tucker_expand` | Implemented | Missing | Tucker projection and expansion exist in `nabled::arrow::tensor`, but are not yet exposed in `ndatafusion`. |

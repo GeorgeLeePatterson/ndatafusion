@@ -105,6 +105,11 @@ pub fn matrix_exp(matrix: Expr, max_terms: Expr, tolerance: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn matrix_exp_complex(matrix: Expr, max_terms: Expr, tolerance: Expr) -> Expr {
+    udfs::matrix_exp_complex_udf().call(vec![matrix, max_terms, tolerance])
+}
+
+#[must_use]
 pub fn matrix_solve_lower(matrix: Expr, rhs: Expr) -> Expr {
     udfs::matrix_solve_lower_udf().call(vec![matrix, rhs])
 }
@@ -237,7 +242,17 @@ pub fn matrix_balance_nonsymmetric(matrix: Expr) -> Expr {
 pub fn matrix_schur(matrix: Expr) -> Expr { udfs::matrix_schur_udf().call(vec![matrix]) }
 
 #[must_use]
+pub fn matrix_schur_complex(matrix: Expr) -> Expr {
+    udfs::matrix_schur_complex_udf().call(vec![matrix])
+}
+
+#[must_use]
 pub fn matrix_polar(matrix: Expr) -> Expr { udfs::matrix_polar_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_polar_complex(matrix: Expr) -> Expr {
+    udfs::matrix_polar_complex_udf().call(vec![matrix])
+}
 
 #[must_use]
 pub fn matrix_gram_schmidt(matrix: Expr) -> Expr {
@@ -253,6 +268,11 @@ pub fn matrix_gram_schmidt_classic(matrix: Expr) -> Expr {
 pub fn matrix_exp_eigen(matrix: Expr) -> Expr { udfs::matrix_exp_eigen_udf().call(vec![matrix]) }
 
 #[must_use]
+pub fn matrix_exp_eigen_complex(matrix: Expr) -> Expr {
+    udfs::matrix_exp_eigen_complex_udf().call(vec![matrix])
+}
+
+#[must_use]
 pub fn matrix_log_taylor(matrix: Expr, max_terms: Expr, tolerance: Expr) -> Expr {
     udfs::matrix_log_taylor_udf().call(vec![matrix, max_terms, tolerance])
 }
@@ -261,7 +281,17 @@ pub fn matrix_log_taylor(matrix: Expr, max_terms: Expr, tolerance: Expr) -> Expr
 pub fn matrix_log_eigen(matrix: Expr) -> Expr { udfs::matrix_log_eigen_udf().call(vec![matrix]) }
 
 #[must_use]
+pub fn matrix_log_eigen_complex(matrix: Expr) -> Expr {
+    udfs::matrix_log_eigen_complex_udf().call(vec![matrix])
+}
+
+#[must_use]
 pub fn matrix_log_svd(matrix: Expr) -> Expr { udfs::matrix_log_svd_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_log_svd_complex(matrix: Expr) -> Expr {
+    udfs::matrix_log_svd_complex_udf().call(vec![matrix])
+}
 
 #[must_use]
 pub fn matrix_power(matrix: Expr, power: Expr) -> Expr {
@@ -269,7 +299,17 @@ pub fn matrix_power(matrix: Expr, power: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn matrix_power_complex(matrix: Expr, power: Expr) -> Expr {
+    udfs::matrix_power_complex_udf().call(vec![matrix, power])
+}
+
+#[must_use]
 pub fn matrix_sign(matrix: Expr) -> Expr { udfs::matrix_sign_udf().call(vec![matrix]) }
+
+#[must_use]
+pub fn matrix_sign_complex(matrix: Expr) -> Expr {
+    udfs::matrix_sign_complex_udf().call(vec![matrix])
+}
 
 #[must_use]
 pub fn sparse_matvec(matrices: Expr, vectors: Expr) -> Expr {
@@ -500,13 +540,15 @@ mod tests {
         matrix_conjugate_gradient, matrix_conjugate_gradient_complex, matrix_correlation,
         matrix_correlation_complex, matrix_covariance, matrix_covariance_complex,
         matrix_determinant, matrix_eigen_generalized, matrix_eigen_symmetric, matrix_exp,
-        matrix_exp_eigen, matrix_gmres, matrix_gmres_complex, matrix_gram_schmidt,
-        matrix_gram_schmidt_classic, matrix_inverse, matrix_log_determinant, matrix_log_eigen,
-        matrix_log_svd, matrix_log_taylor, matrix_lu, matrix_lu_solve, matrix_matmat_complex,
-        matrix_matmul, matrix_matvec, matrix_matvec_complex, matrix_pca,
-        matrix_pca_inverse_transform, matrix_pca_transform, matrix_polar, matrix_power, matrix_qr,
-        matrix_qr_condition_number, matrix_qr_pivoted, matrix_qr_reconstruct, matrix_qr_reduced,
-        matrix_qr_solve_least_squares, matrix_schur, matrix_sign, matrix_solve_lower,
+        matrix_exp_complex, matrix_exp_eigen, matrix_exp_eigen_complex, matrix_gmres,
+        matrix_gmres_complex, matrix_gram_schmidt, matrix_gram_schmidt_classic, matrix_inverse,
+        matrix_log_determinant, matrix_log_eigen, matrix_log_eigen_complex, matrix_log_svd,
+        matrix_log_svd_complex, matrix_log_taylor, matrix_lu, matrix_lu_solve,
+        matrix_matmat_complex, matrix_matmul, matrix_matvec, matrix_matvec_complex, matrix_pca,
+        matrix_pca_inverse_transform, matrix_pca_transform, matrix_polar, matrix_polar_complex,
+        matrix_power, matrix_power_complex, matrix_qr, matrix_qr_condition_number,
+        matrix_qr_pivoted, matrix_qr_reconstruct, matrix_qr_reduced, matrix_qr_solve_least_squares,
+        matrix_schur, matrix_schur_complex, matrix_sign, matrix_sign_complex, matrix_solve_lower,
         matrix_solve_lower_matrix, matrix_solve_upper, matrix_solve_upper_matrix, matrix_svd,
         matrix_svd_condition_number, matrix_svd_null_space, matrix_svd_pseudo_inverse,
         matrix_svd_rank, matrix_svd_reconstruct, matrix_svd_truncated, matrix_svd_with_tolerance,
@@ -656,10 +698,9 @@ mod tests {
     }
 
     #[test]
-    fn decomposition_and_matrix_function_helpers_wrap_the_expected_udfs() {
+    fn decomposition_helpers_wrap_the_expected_udfs() {
         let one = literal_i64(1);
         let two = literal_i64(2);
-        let three = literal_i64(3);
 
         assert_scalar_function(matrix_lu(one.clone()), "matrix_lu", 1);
         assert_scalar_function(matrix_lu_solve(one.clone(), two.clone()), "matrix_lu_solve", 2);
@@ -723,28 +764,60 @@ mod tests {
             1,
         );
         assert_scalar_function(matrix_schur(one.clone()), "matrix_schur", 1);
+        assert_scalar_function(matrix_schur_complex(one.clone()), "matrix_schur_complex", 1);
         assert_scalar_function(matrix_polar(one.clone()), "matrix_polar", 1);
+        assert_scalar_function(matrix_polar_complex(one.clone()), "matrix_polar_complex", 1);
         assert_scalar_function(matrix_gram_schmidt(one.clone()), "matrix_gram_schmidt", 1);
         assert_scalar_function(
             matrix_gram_schmidt_classic(one.clone()),
             "matrix_gram_schmidt_classic",
             1,
         );
+    }
+
+    #[test]
+    fn matrix_function_helpers_wrap_the_expected_udfs() {
+        let one = literal_i64(1);
+        let two = literal_i64(2);
+        let three = literal_i64(3);
+
         assert_scalar_function(
             matrix_exp(one.clone(), two.clone(), three.clone()),
             "matrix_exp",
             3,
         );
+        assert_scalar_function(
+            matrix_exp_complex(one.clone(), two.clone(), three.clone()),
+            "matrix_exp_complex",
+            3,
+        );
         assert_scalar_function(matrix_exp_eigen(one.clone()), "matrix_exp_eigen", 1);
+        assert_scalar_function(
+            matrix_exp_eigen_complex(one.clone()),
+            "matrix_exp_eigen_complex",
+            1,
+        );
         assert_scalar_function(
             matrix_log_taylor(one.clone(), two.clone(), three.clone()),
             "matrix_log_taylor",
             3,
         );
         assert_scalar_function(matrix_log_eigen(one.clone()), "matrix_log_eigen", 1);
+        assert_scalar_function(
+            matrix_log_eigen_complex(one.clone()),
+            "matrix_log_eigen_complex",
+            1,
+        );
         assert_scalar_function(matrix_log_svd(one.clone()), "matrix_log_svd", 1);
+        assert_scalar_function(matrix_log_svd_complex(one.clone()), "matrix_log_svd_complex", 1);
         assert_scalar_function(matrix_power(one.clone(), two.clone()), "matrix_power", 2);
+        assert_scalar_function(
+            matrix_power_complex(one.clone(), two.clone()),
+            "matrix_power_complex",
+            2,
+        );
         assert_scalar_function(matrix_sign(one.clone()), "matrix_sign", 1);
+        assert_scalar_function(matrix_sign_complex(one.clone()), "matrix_sign_complex", 1);
     }
 
     #[test]

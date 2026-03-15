@@ -10,11 +10,12 @@ pub use crate::udf::decomposition::{
     matrix_balance_nonsymmetric_udf, matrix_cholesky_inverse_udf, matrix_cholesky_udf,
     matrix_determinant_udf, matrix_eigen_generalized_udf, matrix_eigen_symmetric_udf,
     matrix_gram_schmidt_classic_udf, matrix_gram_schmidt_udf, matrix_inverse_udf,
-    matrix_log_determinant_udf, matrix_lu_udf, matrix_polar_udf, matrix_qr_condition_number_udf,
-    matrix_qr_pivoted_udf, matrix_qr_reconstruct_udf, matrix_qr_reduced_udf,
-    matrix_qr_solve_least_squares_udf, matrix_qr_udf, matrix_schur_udf,
-    matrix_svd_condition_number_udf, matrix_svd_null_space_udf, matrix_svd_pseudo_inverse_udf,
-    matrix_svd_rank_udf, matrix_svd_reconstruct_udf, matrix_svd_truncated_udf, matrix_svd_udf,
+    matrix_log_determinant_udf, matrix_lu_udf, matrix_polar_complex_udf, matrix_polar_udf,
+    matrix_qr_condition_number_udf, matrix_qr_pivoted_udf, matrix_qr_reconstruct_udf,
+    matrix_qr_reduced_udf, matrix_qr_solve_least_squares_udf, matrix_qr_udf,
+    matrix_schur_complex_udf, matrix_schur_udf, matrix_svd_condition_number_udf,
+    matrix_svd_null_space_udf, matrix_svd_pseudo_inverse_udf, matrix_svd_rank_udf,
+    matrix_svd_reconstruct_udf, matrix_svd_truncated_udf, matrix_svd_udf,
     matrix_svd_with_tolerance_udf,
 };
 pub use crate::udf::iterative::{
@@ -26,8 +27,10 @@ pub use crate::udf::matrix::{
     matrix_matvec_complex_udf, matrix_matvec_udf,
 };
 pub use crate::udf::matrix_functions::{
-    matrix_exp_eigen_udf, matrix_exp_udf, matrix_log_eigen_udf, matrix_log_svd_udf,
-    matrix_log_taylor_udf, matrix_power_udf, matrix_sign_udf,
+    matrix_exp_complex_udf, matrix_exp_eigen_complex_udf, matrix_exp_eigen_udf, matrix_exp_udf,
+    matrix_log_eigen_complex_udf, matrix_log_eigen_udf, matrix_log_svd_complex_udf,
+    matrix_log_svd_udf, matrix_log_taylor_udf, matrix_power_complex_udf, matrix_power_udf,
+    matrix_sign_complex_udf, matrix_sign_udf,
 };
 pub use crate::udf::ml::{
     linear_regression_udf, matrix_center_columns_complex_udf, matrix_center_columns_udf,
@@ -59,14 +62,18 @@ pub use crate::udf::vector::{
 };
 
 /// Return all currently implemented `ndatafusion` scalar UDFs.
-#[must_use]
-pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
+fn constructor_functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         make_vector_udf(),
         make_matrix_udf(),
         make_tensor_udf(),
         make_variable_tensor_udf(),
         make_csr_matrix_batch_udf(),
+    ]
+}
+
+fn vector_functions() -> Vec<Arc<ScalarUDF>> {
+    vec![
         vector_l2_norm_udf(),
         vector_dot_udf(),
         vector_cosine_similarity_udf(),
@@ -76,6 +83,11 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         vector_l2_norm_complex_udf(),
         vector_cosine_similarity_complex_udf(),
         vector_normalize_complex_udf(),
+    ]
+}
+
+fn matrix_and_decomposition_functions() -> Vec<Arc<ScalarUDF>> {
+    vec![
         matrix_matvec_udf(),
         matrix_matvec_complex_udf(),
         matrix_matmul_udf(),
@@ -106,7 +118,9 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_eigen_generalized_udf(),
         matrix_balance_nonsymmetric_udf(),
         matrix_schur_udf(),
+        matrix_schur_complex_udf(),
         matrix_polar_udf(),
+        matrix_polar_complex_udf(),
         matrix_gram_schmidt_udf(),
         matrix_gram_schmidt_classic_udf(),
         matrix_conjugate_gradient_udf(),
@@ -119,11 +133,22 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_solve_upper_matrix_udf(),
         matrix_exp_udf(),
         matrix_exp_eigen_udf(),
+        matrix_exp_complex_udf(),
+        matrix_exp_eigen_complex_udf(),
         matrix_log_taylor_udf(),
         matrix_log_eigen_udf(),
+        matrix_log_eigen_complex_udf(),
         matrix_log_svd_udf(),
+        matrix_log_svd_complex_udf(),
         matrix_power_udf(),
+        matrix_power_complex_udf(),
         matrix_sign_udf(),
+        matrix_sign_complex_udf(),
+    ]
+}
+
+fn sparse_tensor_and_ml_functions() -> Vec<Arc<ScalarUDF>> {
+    vec![
         sparse_matvec_udf(),
         sparse_lu_solve_udf(),
         sparse_matmat_dense_udf(),
@@ -159,6 +184,15 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
     ]
 }
 
+#[must_use]
+pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
+    let mut functions = constructor_functions();
+    functions.extend(vector_functions());
+    functions.extend(matrix_and_decomposition_functions());
+    functions.extend(sparse_tensor_and_ml_functions());
+    functions
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -166,10 +200,13 @@ mod tests {
         make_variable_tensor_udf, make_vector_udf, matrix_center_columns_complex_udf,
         matrix_cholesky_solve_udf, matrix_column_means_complex_udf,
         matrix_conjugate_gradient_complex_udf, matrix_conjugate_gradient_udf,
-        matrix_correlation_complex_udf, matrix_covariance_complex_udf, matrix_exp_udf,
-        matrix_gmres_complex_udf, matrix_gmres_udf, matrix_log_taylor_udf, matrix_lu_solve_udf,
-        matrix_matmat_complex_udf, matrix_matmul_udf, matrix_matvec_complex_udf, matrix_matvec_udf,
-        matrix_power_udf, matrix_qr_solve_least_squares_udf, matrix_solve_lower_matrix_udf,
+        matrix_correlation_complex_udf, matrix_covariance_complex_udf, matrix_exp_complex_udf,
+        matrix_exp_eigen_complex_udf, matrix_exp_udf, matrix_gmres_complex_udf, matrix_gmres_udf,
+        matrix_log_eigen_complex_udf, matrix_log_svd_complex_udf, matrix_log_taylor_udf,
+        matrix_lu_solve_udf, matrix_matmat_complex_udf, matrix_matmul_udf,
+        matrix_matvec_complex_udf, matrix_matvec_udf, matrix_polar_complex_udf,
+        matrix_power_complex_udf, matrix_power_udf, matrix_qr_solve_least_squares_udf,
+        matrix_schur_complex_udf, matrix_sign_complex_udf, matrix_solve_lower_matrix_udf,
         matrix_solve_lower_udf, matrix_solve_upper_matrix_udf, matrix_solve_upper_udf,
         matrix_svd_truncated_udf, matrix_svd_with_tolerance_udf, sparse_lu_solve_udf,
         sparse_matmat_dense_udf, sparse_matmat_sparse_udf, sparse_matvec_udf, sparse_transpose_udf,
@@ -188,7 +225,7 @@ mod tests {
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
-        assert_eq!(all_default_functions().len(), 94);
+        assert_eq!(all_default_functions().len(), 102);
     }
 
     #[test]
@@ -230,6 +267,12 @@ mod tests {
             )
         );
         assert_eq!(
+            matrix_exp_complex_udf().signature().parameter_names.as_deref(),
+            Some(
+                ["matrix".to_string(), "max_terms".to_string(), "tolerance".to_string()].as_slice()
+            )
+        );
+        assert_eq!(
             matrix_conjugate_gradient_udf().signature().parameter_names.as_deref(),
             Some(
                 [
@@ -260,6 +303,10 @@ mod tests {
         assert_eq!(
             matrix_svd_with_tolerance_udf().signature().parameter_names.as_deref(),
             Some(["matrix".to_string(), "tolerance".to_string()].as_slice())
+        );
+        assert_eq!(
+            matrix_power_complex_udf().signature().parameter_names.as_deref(),
+            Some(["matrix".to_string(), "power".to_string()].as_slice())
         );
         assert_eq!(
             linear_regression_udf().signature().parameter_names.as_deref(),
@@ -301,6 +348,8 @@ mod tests {
             matrix_solve_upper_udf(),
             matrix_solve_lower_matrix_udf(),
             matrix_solve_upper_matrix_udf(),
+            matrix_schur_complex_udf(),
+            matrix_polar_complex_udf(),
             sparse_matvec_udf(),
             sparse_matmat_dense_udf(),
             sparse_transpose_udf(),
@@ -327,6 +376,12 @@ mod tests {
             matrix_center_columns_complex_udf(),
             matrix_covariance_complex_udf(),
             matrix_correlation_complex_udf(),
+            matrix_exp_complex_udf(),
+            matrix_exp_eigen_complex_udf(),
+            matrix_log_eigen_complex_udf(),
+            matrix_log_svd_complex_udf(),
+            matrix_power_complex_udf(),
+            matrix_sign_complex_udf(),
             matrix_svd_truncated_udf(),
             matrix_svd_with_tolerance_udf(),
             linear_regression_udf(),
