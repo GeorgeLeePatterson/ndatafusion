@@ -49,10 +49,12 @@ includes:
 - `matrix_power`
 - `matrix_conjugate_gradient`
 - `matrix_gmres`
+- `matrix_conjugate_gradient_complex`
+- `matrix_gmres_complex`
 - `matrix_svd_truncated`
 - `matrix_svd_with_tolerance`
 - `linear_regression`
- - `linear_regression_fit`
+- `linear_regression_fit`
 
 For numerical UDFs with data operands followed by control scalars, prefer positional data
 arguments first and named trailing controls after. For example:
@@ -116,6 +118,19 @@ order-sensitive.
 | `matrix_power` | Implemented | Matrix power with explicit scalar exponent. |
 | `matrix_sign` | Implemented | Matrix sign function. |
 
+## Complex Matrix Ops, Statistics, And Iterative Solvers
+
+| UDF | Status | Notes |
+|---|---|---|
+| `matrix_matvec_complex` | Implemented | Row-wise complex matrix-vector product over canonical `arrow.fixed_shape_tensor<ndarrow.complex64>` plus `FixedSizeList<ndarrow.complex64>(D)` inputs. |
+| `matrix_matmat_complex` | Implemented | Row-wise complex matrix-matrix product over canonical complex matrix batches. |
+| `matrix_column_means_complex` | Implemented | Row-wise complex column means. |
+| `matrix_center_columns_complex` | Implemented | Row-wise complex column centering. |
+| `matrix_covariance_complex` | Implemented | Row-wise complex covariance matrix. |
+| `matrix_correlation_complex` | Implemented | Row-wise complex correlation matrix. |
+| `matrix_conjugate_gradient_complex` | Implemented | Complex dense iterative solve with explicit `tolerance` and `max_iterations`. |
+| `matrix_gmres_complex` | Implemented | Complex dense GMRES solve with explicit `tolerance` and `max_iterations`. |
+
 ## Decompositions And Spectral Helpers
 
 | UDF | Status | Notes |
@@ -171,6 +186,15 @@ order-sensitive.
 | `tensor_variable_normalize_last_axis` | Implemented | Variable-shape last-axis normalization. |
 | `tensor_variable_batched_dot_last_axis` | Implemented | Variable-shape row-wise batched dot over the last axis. |
 
+## Complex Tensor
+
+| UDF | Status | Notes |
+|---|---|---|
+| `tensor_l2_norm_last_axis_complex` | Implemented | Fixed-shape complex last-axis norm with real-valued output. |
+| `tensor_normalize_last_axis_complex` | Implemented | Fixed-shape complex last-axis normalization. |
+| `tensor_variable_l2_norm_last_axis_complex` | Implemented | Variable-shape complex last-axis norm with real-valued output. |
+| `tensor_variable_normalize_last_axis_complex` | Implemented | Variable-shape complex last-axis normalization. |
+
 ## ML, Statistics, And Iterative Solvers
 
 | UDF | Status | Notes |
@@ -199,11 +223,7 @@ order-sensitive.
 
 | Method Or Surface | `nabled` | `ndatafusion` | Notes |
 |---|---|---|---|
-| `matrix_matvec_complex`, `matrix_matmat_complex` | Implemented | Missing | Complex dense matrix products exist in `nabled::arrow::matrix`, but `ndatafusion` only exposes real-valued matrix products today. |
-| `matrix_column_means_complex`, `matrix_center_columns_complex` | Implemented | Missing | Complex statistics exist in `nabled::arrow::stats`, but `ndatafusion` does not yet expose a complex statistics surface. |
-| `matrix_covariance_complex`, `matrix_correlation_complex` | Implemented | Missing | Complex covariance and correlation are implemented in `nabled`, but `ndatafusion` currently stops at real-valued covariance/correlation. |
 | `matrix_pca_complex` | Implemented | Missing | `nabled::arrow::pca::compute_complex` exists, but `ndatafusion` does not yet define a SQL-facing complex PCA contract. |
-| `matrix_conjugate_gradient_complex`, `matrix_gmres_complex` | Implemented | Missing | Complex dense iterative solvers exist in `nabled::arrow::iterative`, but `ndatafusion` only exposes real-valued iterative solves today. |
 | `matrix_eigen_nonsymmetric_f32`, `matrix_eigen_nonsymmetric_f64` | Implemented | Missing | `nabled::arrow::eigen::nonsymmetric_f32` and `nonsymmetric_f64` exist and return complex outputs; `ndatafusion` has not yet settled the SQL result contract for those complex results. |
 | `matrix_eigen_nonsymmetric_bi_f32`, `matrix_eigen_nonsymmetric_bi_f64` | Implemented | Missing | Bi-eigen variants with left and right eigenvectors exist in `nabled`, but require a richer complex struct contract in `ndatafusion`. |
 | `matrix_eigen_nonsymmetric_complex` | Implemented | Missing | Complex nonsymmetric eigendecomposition exists in `nabled::arrow::eigen`, but is not yet exposed in `ndatafusion`. |
@@ -211,8 +231,6 @@ order-sensitive.
 | `matrix_exp_complex`, `matrix_exp_eigen_complex` | Implemented | Missing | Complex matrix exponentials exist in `nabled::arrow::matrix_functions`; `ndatafusion` has not yet admitted complex matrix outputs. |
 | `matrix_log_eigen_complex`, `matrix_log_svd_complex` | Implemented | Missing | Complex matrix logarithms exist in `nabled`, but `ndatafusion` does not yet expose them. |
 | `matrix_power_complex`, `matrix_sign_complex` | Implemented | Missing | Complex matrix power and sign exist in `nabled`; `ndatafusion` currently exposes only real-valued variants. |
-| `tensor_l2_norm_last_axis_complex`, `tensor_normalize_last_axis_complex` | Implemented | Missing | Complex fixed-shape tensor norm and normalization exist in `nabled::arrow::tensor`, but `ndatafusion` does not yet expose a complex tensor surface. |
-| `tensor_variable_l2_norm_last_axis_complex`, `tensor_variable_normalize_last_axis_complex` | Implemented | Missing | Complex variable-shape tensor norm and normalization exist in `nabled`, but `ndatafusion` does not yet expose them. |
 | `tensor_cp_als3`, `tensor_cp_als_nd` | Implemented | Missing | CP decomposition and related reporting/reconstruction helpers exist in `nabled::arrow::tensor`, but `ndatafusion` has not yet admitted a SQL-facing decomposition contract. |
 | `tensor_hosvd_nd`, `tensor_hooi_nd` | Implemented | Missing | Higher-order SVD and HOOI exist in `nabled`, but there is no settled `ndatafusion` SQL contract yet. |
 | `tensor_tucker_project`, `tensor_tucker_expand` | Implemented | Missing | Tucker projection and expansion exist in `nabled::arrow::tensor`, but are not yet exposed in `ndatafusion`. |

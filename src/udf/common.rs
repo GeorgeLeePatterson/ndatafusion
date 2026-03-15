@@ -10,8 +10,9 @@ use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::ScalarUDF;
 use datafusion::logical_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use nabled::arrow::ArrowInteropError;
-use ndarray::{ArrayView2, ArrayView3, ArrayViewD, Ix3};
+use ndarray::{Array2, ArrayD, ArrayView2, ArrayView3, ArrayViewD, Ix3, IxDyn};
 use ndarrow::NdarrowElement;
+use num_complex::Complex64;
 
 use crate::error::{array_argument_required, exec_error, scalar_argument_required};
 
@@ -257,6 +258,65 @@ where
 {
     fixed_shape_tensor_viewd::<T>(field, array, function_name)?
         .into_dimensionality::<Ix3>()
+        .map_err(|error| exec_error(function_name, error))
+}
+
+pub(crate) fn complex_fixed_shape_tensor_viewd<'a>(
+    field: &'a FieldRef,
+    array: &'a FixedSizeListArray,
+    function_name: &str,
+) -> Result<ArrayViewD<'a, Complex64>> {
+    ndarrow::complex64_fixed_shape_tensor_as_array_viewd(field.as_ref(), array)
+        .map_err(|error| exec_error(function_name, error))
+}
+
+pub(crate) fn complex_fixed_shape_tensor_view3<'a>(
+    field: &'a FieldRef,
+    array: &'a FixedSizeListArray,
+    function_name: &str,
+) -> Result<ArrayView3<'a, Complex64>> {
+    complex_fixed_shape_tensor_viewd(field, array, function_name)?
+        .into_dimensionality::<Ix3>()
+        .map_err(|error| exec_error(function_name, error))
+}
+
+pub(crate) fn complex_fixed_size_list_array_from_flat_rows(
+    function_name: &str,
+    row_count: usize,
+    row_width: usize,
+    values: Vec<Complex64>,
+) -> Result<FixedSizeListArray> {
+    let expected_len = row_count
+        .checked_mul(row_width)
+        .ok_or_else(|| exec_error(function_name, "row count overflow"))?;
+    if values.len() != expected_len {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "expected {expected_len} complex values for ({row_count}, {row_width}) rows, \
+                 found {}",
+                values.len()
+            ),
+        ));
+    }
+    let output = Array2::from_shape_vec((row_count, row_width), values)
+        .map_err(|error| exec_error(function_name, error))?;
+    ndarrow::array2_complex64_to_fixed_size_list(output)
+        .map_err(|error| exec_error(function_name, error))
+}
+
+pub(crate) fn complex_fixed_shape_tensor_array_from_flat_rows(
+    function_name: &str,
+    batch: usize,
+    shape: &[usize],
+    values: Vec<Complex64>,
+) -> Result<(Field, FixedSizeListArray)> {
+    let mut full_shape = Vec::with_capacity(shape.len() + 1);
+    full_shape.push(batch);
+    full_shape.extend_from_slice(shape);
+    let output = ArrayD::from_shape_vec(IxDyn(&full_shape), values)
+        .map_err(|error| exec_error(function_name, error))?;
+    ndarrow::arrayd_complex64_to_fixed_shape_tensor(function_name, output)
         .map_err(|error| exec_error(function_name, error))
 }
 

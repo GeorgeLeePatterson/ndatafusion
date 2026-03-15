@@ -80,8 +80,23 @@ top of the released upstream contracts.
     - `vector_correlation_agg`
     - `vector_pca_fit`
     - `linear_regression_fit`
-30. The registered catalog now spans 82 scalar UDFs plus 4 aggregate UDFs, with named-argument
-    support for selected constructors, scalar control arguments, and `linear_regression_fit`.
+30. The current scalar catalog now also covers the first complex matrix/stat/tensor/iterative
+    slice:
+    - `matrix_matvec_complex`
+    - `matrix_matmat_complex`
+    - `matrix_column_means_complex`
+    - `matrix_center_columns_complex`
+    - `matrix_covariance_complex`
+    - `matrix_correlation_complex`
+    - `matrix_conjugate_gradient_complex`
+    - `matrix_gmres_complex`
+    - `tensor_l2_norm_last_axis_complex`
+    - `tensor_normalize_last_axis_complex`
+    - `tensor_variable_l2_norm_last_axis_complex`
+    - `tensor_variable_normalize_last_axis_complex`
+31. The registered catalog now spans 94 scalar UDFs plus 4 aggregate UDFs, with named-argument
+    support for selected constructors, scalar control arguments, their complex iterative
+    counterparts, and `linear_regression_fit`.
 
 ## Current Repository Reality
 

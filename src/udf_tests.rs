@@ -73,6 +73,17 @@ fn matrix_batch_f32<const B: usize, const R: usize, const C: usize>(
     (Arc::new(field), array)
 }
 
+fn complex_matrix_batch<const B: usize, const R: usize, const C: usize>(
+    name: &str,
+    values: [[[Complex64; C]; R]; B],
+) -> (FieldRef, FixedSizeListArray) {
+    let values = values.into_iter().flatten().flatten().collect::<Vec<_>>();
+    let array = Array3::from_shape_vec((B, R, C), values).expect("complex matrix batch shape");
+    let (field, array) = ndarrow::arrayd_complex64_to_fixed_shape_tensor(name, array.into_dyn())
+        .expect("complex matrix batch");
+    (Arc::new(field), array)
+}
+
 fn ragged_vectors(name: &str, rows: Vec<Vec<f64>>) -> (FieldRef, StructArray) {
     let rows = rows
         .into_iter()
@@ -131,6 +142,23 @@ fn ragged_matrices_f32(name: &str, rows: Vec<Vec<Vec<f32>>>) -> (FieldRef, Struc
     (Arc::new(field), array)
 }
 
+fn complex_ragged_matrices(name: &str, rows: Vec<Vec<Vec<Complex64>>>) -> (FieldRef, StructArray) {
+    let rows = rows
+        .into_iter()
+        .map(|matrix| {
+            let row_count = matrix.len();
+            let col_count = matrix.first().map_or(0, Vec::len);
+            let values = matrix.into_iter().flatten().collect::<Vec<_>>();
+            Array2::from_shape_vec((row_count, col_count), values)
+                .expect("complex matrix batch shape")
+                .into_dyn()
+        })
+        .collect::<Vec<_>>();
+    let (field, array) = ndarrow::arrays_complex64_to_variable_shape_tensor(name, rows, None)
+        .expect("complex ragged matrices");
+    (Arc::new(field), array)
+}
+
 fn tensor_batch4<const B: usize, const D0: usize, const D1: usize, const D2: usize>(
     name: &str,
     values: [[[[f64; D2]; D1]; D0]; B],
@@ -150,6 +178,18 @@ fn tensor_batch4_f32<const B: usize, const D0: usize, const D1: usize, const D2:
     let array = Array4::from_shape_vec((B, D0, D1, D2), values).expect("tensor batch shape");
     let (field, array) =
         ndarrow::arrayd_to_fixed_shape_tensor(name, array.into_dyn()).expect("tensor batch");
+    (Arc::new(field), array)
+}
+
+fn complex_tensor_batch4<const B: usize, const D0: usize, const D1: usize, const D2: usize>(
+    name: &str,
+    values: [[[[Complex64; D2]; D1]; D0]; B],
+) -> (FieldRef, FixedSizeListArray) {
+    let values = values.into_iter().flatten().flatten().flatten().collect::<Vec<_>>();
+    let array =
+        Array4::from_shape_vec((B, D0, D1, D2), values).expect("complex tensor batch shape");
+    let (field, array) = ndarrow::arrayd_complex64_to_fixed_shape_tensor(name, array.into_dyn())
+        .expect("complex tensor batch");
     (Arc::new(field), array)
 }
 
@@ -302,6 +342,30 @@ fn fixed_shape_viewd<'a>(
         fixed_size_list_array(values),
     )
     .expect("fixed-shape tensor")
+}
+
+fn complex_fixed_shape_view3<'a>(
+    field: &'a FieldRef,
+    values: &'a ColumnarValue,
+) -> ndarray::ArrayView3<'a, Complex64> {
+    ndarrow::complex64_fixed_shape_tensor_as_array_viewd(
+        field.as_ref(),
+        fixed_size_list_array(values),
+    )
+    .expect("complex fixed-shape tensor")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 complex tensor")
+}
+
+fn complex_fixed_shape_viewd<'a>(
+    field: &'a FieldRef,
+    values: &'a ColumnarValue,
+) -> ndarray::ArrayViewD<'a, Complex64> {
+    ndarrow::complex64_fixed_shape_tensor_as_array_viewd(
+        field.as_ref(),
+        fixed_size_list_array(values),
+    )
+    .expect("complex fixed-shape tensor")
 }
 
 fn fixed_shape_view4<'a>(
@@ -890,6 +954,372 @@ fn vector_udfs_cover_complex_batch_ops() {
     assert_complex_close(normalized[[0, 1]], Complex64::new(0.0, 0.0));
     assert_complex_close(normalized[[1, 0]], Complex64::new(0.0, 0.0));
     assert_complex_close(normalized[[1, 1]], Complex64::new(1.0, 0.0));
+}
+
+fn assert_complex_matrix_products(
+    matrix_field: &FieldRef,
+    matrices: &FixedSizeListArray,
+    vector_field: FieldRef,
+    vectors: &FixedSizeListArray,
+    right_field: &FieldRef,
+    right: &FixedSizeListArray,
+) {
+    let matrix_view =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(matrix_field.as_ref(), matrices)
+            .expect("matrix tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 complex matrix batch");
+    let vector_view = ndarrow::complex64_as_array_view2(vectors).expect("complex rhs");
+    let right_view =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(right_field.as_ref(), right)
+            .expect("right tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 right matrix batch");
+
+    let (matvec_field, matvec) = invoke_udf(
+        &udfs::matrix_matvec_complex_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(vectors.clone())),
+        ],
+        vec![Arc::clone(matrix_field), vector_field],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_matvec_complex");
+    let matvec =
+        ndarrow::complex64_as_array_view2(fixed_size_list_array(&matvec)).expect("complex matvec");
+    let DataType::FixedSizeList(item_field, _) = matvec_field.data_type() else {
+        panic!("expected complex vector output");
+    };
+    assert_eq!(item_field.extension_type_name(), Some("ndarrow.complex64"));
+    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+        let expected = nabled::linalg::matrix::matvec_complex_view(
+            &matrix_view.index_axis(ndarray::Axis(0), row),
+            &vector_view.index_axis(ndarray::Axis(0), row),
+        )
+        .expect("expected complex matvec");
+        for col in 0..expected.len() {
+            assert_complex_close(matvec[[row, col]], expected[col]);
+        }
+    }
+
+    let (matmat_field, matmat) = invoke_udf(
+        &udfs::matrix_matmat_complex_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(right.clone())),
+        ],
+        vec![Arc::clone(matrix_field), Arc::clone(right_field)],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_matmat_complex");
+    let matmat = complex_fixed_shape_view3(&matmat_field, &matmat);
+    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+        let expected = nabled::linalg::matrix::matmat_complex_view(
+            &matrix_view.index_axis(ndarray::Axis(0), row),
+            &right_view.index_axis(ndarray::Axis(0), row),
+        )
+        .expect("expected complex matmat");
+        for i in 0..expected.nrows() {
+            for j in 0..expected.ncols() {
+                assert_complex_close(matmat[[row, i, j]], expected[[i, j]]);
+            }
+        }
+    }
+}
+
+fn assert_complex_matrix_stats(matrix_field: &FieldRef, matrices: &FixedSizeListArray) {
+    let matrix_view =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(matrix_field.as_ref(), matrices)
+            .expect("matrix tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 complex matrix batch");
+
+    let (_, means) = invoke_udf(
+        &udfs::matrix_column_means_complex_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(matrix_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_column_means_complex");
+    let means =
+        ndarrow::complex64_as_array_view2(fixed_size_list_array(&means)).expect("complex means");
+    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+        let expected = nabled::ml::stats::column_means_complex_view(
+            &matrix_view.index_axis(ndarray::Axis(0), row),
+        );
+        for col in 0..expected.len() {
+            assert_complex_close(means[[row, col]], expected[col]);
+        }
+    }
+
+    let (center_field, centered) = invoke_udf(
+        &udfs::matrix_center_columns_complex_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(matrix_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_center_columns_complex");
+    let centered = complex_fixed_shape_view3(&center_field, &centered);
+    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+        let expected = nabled::ml::stats::center_columns_complex_view(
+            &matrix_view.index_axis(ndarray::Axis(0), row),
+        );
+        for i in 0..expected.nrows() {
+            for j in 0..expected.ncols() {
+                assert_complex_close(centered[[row, i, j]], expected[[i, j]]);
+            }
+        }
+    }
+
+    let (covariance_field, covariance) = invoke_udf(
+        &udfs::matrix_covariance_complex_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(matrix_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_covariance_complex");
+    let covariance = complex_fixed_shape_view3(&covariance_field, &covariance);
+    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+        let expected = nabled::ml::stats::covariance_matrix_complex_view(
+            &matrix_view.index_axis(ndarray::Axis(0), row),
+        )
+        .expect("expected complex covariance");
+        for i in 0..expected.nrows() {
+            for j in 0..expected.ncols() {
+                assert_complex_close(covariance[[row, i, j]], expected[[i, j]]);
+            }
+        }
+    }
+
+    let (correlation_field, correlation) = invoke_udf(
+        &udfs::matrix_correlation_complex_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(matrix_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_correlation_complex");
+    let correlation = complex_fixed_shape_view3(&correlation_field, &correlation);
+    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+        let expected = nabled::ml::stats::correlation_matrix_complex_view(
+            &matrix_view.index_axis(ndarray::Axis(0), row),
+        )
+        .expect("expected complex correlation");
+        for i in 0..expected.nrows() {
+            for j in 0..expected.ncols() {
+                assert_complex_close(correlation[[row, i, j]], expected[[i, j]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn complex_matrix_udfs_cover_products_and_stats() {
+    let (matrix_field, matrices) = complex_matrix_batch("complex_matrices", [
+        [[Complex64::new(1.0, 1.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, 0.0),
+        ]],
+        [[Complex64::new(2.0, 0.0), Complex64::new(1.0, -1.0)], [
+            Complex64::new(1.0, 1.0),
+            Complex64::new(3.0, 0.0),
+        ]],
+    ]);
+    let (vector_field, vectors) = complex_vector_batch("complex_rhs", [
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
+        [Complex64::new(1.0, -1.0), Complex64::new(2.0, 0.0)],
+    ]);
+    let (right_field, right) = complex_matrix_batch("complex_right", [
+        [[Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)], [
+            Complex64::new(2.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ]],
+        [[Complex64::new(0.0, 1.0), Complex64::new(1.0, 0.0)], [
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]],
+    ]);
+
+    assert_complex_matrix_products(
+        &matrix_field,
+        &matrices,
+        vector_field,
+        &vectors,
+        &right_field,
+        &right,
+    );
+    assert_complex_matrix_stats(&matrix_field, &matrices);
+}
+
+#[test]
+fn complex_iterative_udfs_cover_outputs() {
+    let (matrix_field, matrices) = complex_matrix_batch("complex_systems", [
+        [[Complex64::new(4.0, 0.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(9.0, 0.0),
+        ]],
+        [[Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(5.0, 0.0),
+        ]],
+    ]);
+    let (rhs_field, rhs) = complex_vector_batch("complex_rhs", [
+        [Complex64::new(8.0, 0.0), Complex64::new(18.0, 0.0)],
+        [Complex64::new(4.0, 0.0), Complex64::new(10.0, 0.0)],
+    ]);
+    let cg_udf = udfs::matrix_conjugate_gradient_complex_udf();
+    let gmres_udf = udfs::matrix_gmres_complex_udf();
+    let tolerance = ScalarValue::Float64(Some(1.0e-10));
+    let max_iterations = ScalarValue::Int64(Some(16));
+    let scalar_fields = vec![
+        Arc::clone(&matrix_field),
+        Arc::clone(&rhs_field),
+        Arc::new(Field::new("tolerance", DataType::Float64, false)),
+        Arc::new(Field::new("max_iterations", DataType::Int64, false)),
+    ];
+
+    let (_, cg) = invoke_udf(
+        &cg_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(rhs.clone())),
+            ColumnarValue::Scalar(tolerance.clone()),
+            ColumnarValue::Scalar(max_iterations.clone()),
+        ],
+        scalar_fields.clone(),
+        &[None, None, Some(tolerance.clone()), Some(max_iterations.clone())],
+        2,
+    )
+    .expect("matrix_conjugate_gradient_complex");
+    let cg = ndarrow::complex64_as_array_view2(fixed_size_list_array(&cg)).expect("cg output");
+    assert_complex_close(cg[[0, 0]], Complex64::new(2.0, 0.0));
+    assert_complex_close(cg[[0, 1]], Complex64::new(2.0, 0.0));
+    assert_complex_close(cg[[1, 0]], Complex64::new(2.0, 0.0));
+    assert_complex_close(cg[[1, 1]], Complex64::new(2.0, 0.0));
+
+    let (_, gmres) = invoke_udf(
+        &gmres_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices)),
+            ColumnarValue::Array(Arc::new(rhs)),
+            ColumnarValue::Scalar(tolerance.clone()),
+            ColumnarValue::Scalar(max_iterations.clone()),
+        ],
+        scalar_fields,
+        &[None, None, Some(tolerance), Some(max_iterations)],
+        2,
+    )
+    .expect("matrix_gmres_complex");
+    let gmres =
+        ndarrow::complex64_as_array_view2(fixed_size_list_array(&gmres)).expect("gmres output");
+    assert_complex_close(gmres[[0, 0]], Complex64::new(2.0, 0.0));
+    assert_complex_close(gmres[[0, 1]], Complex64::new(2.0, 0.0));
+    assert_complex_close(gmres[[1, 0]], Complex64::new(2.0, 0.0));
+    assert_complex_close(gmres[[1, 1]], Complex64::new(2.0, 0.0));
+}
+
+#[test]
+fn complex_tensor_udfs_cover_last_axis_outputs() {
+    let (tensor_field, tensor) = complex_tensor_batch4("complex_tensor", [[
+        [[Complex64::new(3.0, 4.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(5.0, 12.0),
+        ]],
+        [[Complex64::new(8.0, 15.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(7.0, 24.0),
+            Complex64::new(0.0, 0.0),
+        ]],
+    ]]);
+    let (variable_field, variable) = complex_ragged_matrices("complex_ragged", vec![
+        vec![vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, 0.0)], vec![
+            Complex64::new(5.0, 12.0),
+            Complex64::new(0.0, 0.0),
+        ]],
+        vec![vec![Complex64::new(8.0, 15.0), Complex64::new(0.0, 0.0)]],
+    ]);
+    let norm_udf = udfs::tensor_l2_norm_last_axis_complex_udf();
+    let normalize_udf = udfs::tensor_normalize_last_axis_complex_udf();
+    let variable_norm_udf = udfs::tensor_variable_l2_norm_last_axis_complex_udf();
+    let variable_normalize_udf = udfs::tensor_variable_normalize_last_axis_complex_udf();
+
+    let (norm_field, norms) = invoke_udf(
+        &norm_udf,
+        vec![ColumnarValue::Array(Arc::new(tensor.clone()))],
+        vec![Arc::clone(&tensor_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_l2_norm_last_axis_complex");
+    let norms = fixed_shape_view3(&norm_field, &norms);
+    assert_close(norms[[0, 0, 0]], 5.0);
+    assert_close(norms[[0, 0, 1]], 13.0);
+    assert_close(norms[[0, 1, 0]], 17.0);
+    assert_close(norms[[0, 1, 1]], 25.0);
+
+    let (normalize_field, normalized) = invoke_udf(
+        &normalize_udf,
+        vec![ColumnarValue::Array(Arc::new(tensor))],
+        vec![Arc::clone(&tensor_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_normalize_last_axis_complex");
+    let normalized = complex_fixed_shape_viewd(&normalize_field, &normalized)
+        .into_dimensionality::<Ix4>()
+        .expect("rank-4 complex tensor");
+    assert_complex_close(normalized[[0, 0, 0, 0]], Complex64::new(0.6, 0.8));
+    assert_complex_close(normalized[[0, 0, 0, 1]], Complex64::new(0.0, 0.0));
+    assert_complex_close(normalized[[0, 0, 1, 0]], Complex64::new(0.0, 0.0));
+    assert_complex_close(normalized[[0, 0, 1, 1]], Complex64::new(5.0 / 13.0, 12.0 / 13.0));
+
+    let (variable_norm_field, variable_norms) = invoke_udf(
+        &variable_norm_udf,
+        vec![ColumnarValue::Array(Arc::new(variable.clone()))],
+        vec![Arc::clone(&variable_field)],
+        &[None],
+        2,
+    )
+    .expect("tensor_variable_l2_norm_last_axis_complex");
+    let mut norm_iter = ndarrow::variable_shape_tensor_iter::<Float64Type>(
+        variable_norm_field.as_ref(),
+        struct_array(&variable_norms),
+    )
+    .expect("variable norm output");
+    let (_, first_norm) = norm_iter.next().expect("first norm row").expect("first norm view");
+    let (_, second_norm) = norm_iter.next().expect("second norm row").expect("second norm view");
+    assert_close(first_norm[[0]], 5.0);
+    assert_close(first_norm[[1]], 13.0);
+    assert_close(second_norm[[0]], 17.0);
+
+    let (variable_normalize_field, variable_normalized) = invoke_udf(
+        &variable_normalize_udf,
+        vec![ColumnarValue::Array(Arc::new(variable))],
+        vec![variable_field],
+        &[None],
+        2,
+    )
+    .expect("tensor_variable_normalize_last_axis_complex");
+    let mut normalized_iter = ndarrow::complex64_variable_shape_tensor_iter(
+        variable_normalize_field.as_ref(),
+        struct_array(&variable_normalized),
+    )
+    .expect("variable normalize output");
+    let (_, first) =
+        normalized_iter.next().expect("first normalized row").expect("first normalized view");
+    let (_, second) =
+        normalized_iter.next().expect("second normalized row").expect("second normalized view");
+    assert_complex_close(first[[0, 0]], Complex64::new(0.6, 0.8));
+    assert_complex_close(first[[0, 1]], Complex64::new(0.0, 0.0));
+    assert_complex_close(first[[1, 0]], Complex64::new(5.0 / 13.0, 12.0 / 13.0));
+    assert_complex_close(first[[1, 1]], Complex64::new(0.0, 0.0));
+    assert_complex_close(second[[0, 0]], Complex64::new(8.0 / 17.0, 15.0 / 17.0));
+    assert_complex_close(second[[0, 1]], Complex64::new(0.0, 0.0));
 }
 
 #[test]

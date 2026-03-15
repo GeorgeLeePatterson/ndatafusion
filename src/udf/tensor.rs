@@ -19,8 +19,10 @@ use super::common::{
 use super::docs::tensor_doc;
 use crate::error::{exec_error, plan_error};
 use crate::metadata::{
-    fixed_shape_tensor_field, parse_tensor_batch_field, parse_variable_shape_tensor_field,
-    variable_shape_tensor_field,
+    complex_fixed_shape_tensor_field, complex_variable_shape_tensor_field,
+    fixed_shape_tensor_field, parse_complex_tensor_batch_field,
+    parse_complex_variable_shape_tensor_field, parse_tensor_batch_field,
+    parse_variable_shape_tensor_field, variable_shape_tensor_field,
 };
 use crate::signatures::{
     ScalarCoercion, any_signature, coerce_trailing_scalar_arguments, user_defined_signature,
@@ -544,6 +546,119 @@ impl ScalarUDFImpl for TensorNormalizeLastAxis {
                 "Fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
             )
             .with_alternative_syntax("tensor_normalize_last(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TensorL2NormLastAxisComplex {
+    signature: Signature,
+}
+
+impl TensorL2NormLastAxisComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for TensorL2NormLastAxisComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "tensor_l2_norm_last_axis_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let contract = parse_complex_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let reduced = reduced_shape(self.name(), &contract.shape)?;
+        fixed_shape_tensor_field(
+            self.name(),
+            &DataType::Float64,
+            &reduced,
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let _contract = parse_complex_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let tensor = expect_fixed_size_list_arg(&args, 1, self.name())?;
+        let output =
+            nabled::arrow::tensor::l2_norm_last_axis_complex(args.arg_fields[0].as_ref(), tensor)
+                .map_err(|error| map_arrow_error(self.name(), error))?;
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Reduce each fixed-shape complex tensor row by computing the L2 norm over the \
+                 last axis.",
+                "tensor_l2_norm_last_axis_complex(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Fixed-shape complex tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_norm_last_complex(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TensorNormalizeLastAxisComplex {
+    signature: Signature,
+}
+
+impl TensorNormalizeLastAxisComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for TensorNormalizeLastAxisComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "tensor_normalize_last_axis_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let contract = parse_complex_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        complex_fixed_shape_tensor_field(
+            self.name(),
+            &contract.shape,
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let _contract = parse_complex_tensor_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let tensor = expect_fixed_size_list_arg(&args, 1, self.name())?;
+        let output =
+            nabled::arrow::tensor::normalize_last_axis_complex(args.arg_fields[0].as_ref(), tensor)
+                .map_err(|error| map_arrow_error(self.name(), error))?;
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Normalize each fixed-shape complex tensor row over the last axis.",
+                "tensor_normalize_last_axis_complex(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Fixed-shape complex tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_normalize_last_complex(tensor_batch)")
             .build()
         });
         Some(&DOCUMENTATION)
@@ -1208,6 +1323,132 @@ impl ScalarUDFImpl for TensorVariableNormalizeLastAxis {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+struct TensorVariableL2NormLastAxisComplex {
+    signature: Signature,
+}
+
+impl TensorVariableL2NormLastAxisComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for TensorVariableL2NormLastAxisComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "tensor_variable_l2_norm_last_axis_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let contract =
+            parse_complex_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let reduced =
+            reduced_uniform_shape(self.name(), contract.dimensions, contract.uniform_shape)?;
+        variable_shape_tensor_field(
+            self.name(),
+            &DataType::Float64,
+            contract.dimensions - 1,
+            reduced.as_deref(),
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let _contract =
+            parse_complex_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let tensor = expect_struct_arg(&args, 1, self.name())?;
+        let output = nabled::arrow::tensor::l2_norm_last_axis_variable_complex(
+            args.arg_fields[0].as_ref(),
+            tensor,
+        )
+        .map_err(|error| map_arrow_error(self.name(), error))?;
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Reduce each variable-shape complex tensor row by computing the L2 norm over the \
+                 last axis.",
+                "tensor_variable_l2_norm_last_axis_complex(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Variable-shape complex tensor batch in canonical arrow.variable_shape_tensor \
+                 form.",
+            )
+            .with_alternative_syntax("tensor_var_norm_last_complex(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct TensorVariableNormalizeLastAxisComplex {
+    signature: Signature,
+}
+
+impl TensorVariableNormalizeLastAxisComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for TensorVariableNormalizeLastAxisComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "tensor_variable_normalize_last_axis_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let contract =
+            parse_complex_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        complex_variable_shape_tensor_field(
+            self.name(),
+            contract.dimensions,
+            contract.uniform_shape.as_deref(),
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let _contract =
+            parse_complex_variable_shape_tensor_field(&args.arg_fields[0], self.name(), 1)?;
+        let tensor = expect_struct_arg(&args, 1, self.name())?;
+        let output = nabled::arrow::tensor::normalize_last_axis_variable_complex(
+            args.arg_fields[0].as_ref(),
+            tensor,
+        )
+        .map_err(|error| map_arrow_error(self.name(), error))?;
+        Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Normalize each variable-shape complex tensor row over the last axis.",
+                "tensor_variable_normalize_last_axis_complex(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Variable-shape complex tensor batch in canonical arrow.variable_shape_tensor \
+                 form.",
+            )
+            .with_alternative_syntax("tensor_var_normalize_last_complex(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct TensorVariableBatchedDotLastAxis {
     signature: Signature,
 }
@@ -1328,10 +1569,26 @@ pub fn tensor_l2_norm_last_axis_udf() -> Arc<ScalarUDF> {
 }
 
 #[must_use]
+pub fn tensor_l2_norm_last_axis_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorL2NormLastAxisComplex::new())
+            .with_aliases(["tensor_norm_last_complex"]),
+    )
+}
+
+#[must_use]
 pub fn tensor_normalize_last_axis_udf() -> Arc<ScalarUDF> {
     Arc::new(
         ScalarUDF::new_from_impl(TensorNormalizeLastAxis::new())
             .with_aliases(["tensor_normalize_last"]),
+    )
+}
+
+#[must_use]
+pub fn tensor_normalize_last_axis_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorNormalizeLastAxisComplex::new())
+            .with_aliases(["tensor_normalize_last_complex"]),
     )
 }
 
@@ -1375,10 +1632,26 @@ pub fn tensor_variable_l2_norm_last_axis_udf() -> Arc<ScalarUDF> {
 }
 
 #[must_use]
+pub fn tensor_variable_l2_norm_last_axis_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorVariableL2NormLastAxisComplex::new())
+            .with_aliases(["tensor_var_norm_last_complex"]),
+    )
+}
+
+#[must_use]
 pub fn tensor_variable_normalize_last_axis_udf() -> Arc<ScalarUDF> {
     Arc::new(
         ScalarUDF::new_from_impl(TensorVariableNormalizeLastAxis::new())
             .with_aliases(["tensor_var_normalize_last"]),
+    )
+}
+
+#[must_use]
+pub fn tensor_variable_normalize_last_axis_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(
+        ScalarUDF::new_from_impl(TensorVariableNormalizeLastAxisComplex::new())
+            .with_aliases(["tensor_var_normalize_last_complex"]),
     )
 }
 

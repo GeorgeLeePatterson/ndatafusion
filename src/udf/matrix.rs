@@ -19,7 +19,9 @@ use super::common::{
 use super::docs::matrix_doc;
 use crate::error::exec_error;
 use crate::metadata::{
-    fixed_shape_tensor_field, parse_matrix_batch_field, parse_vector_field, vector_field,
+    complex_fixed_shape_tensor_field, complex_vector_field, fixed_shape_tensor_field,
+    parse_complex_matrix_batch_field, parse_complex_vector_field, parse_matrix_batch_field,
+    parse_vector_field, vector_field,
 };
 use crate::signatures::any_signature;
 
@@ -72,6 +74,22 @@ fn return_matrix_vector(
         ));
     }
     Ok((matrix.value_type, matrix.rows, matrix.cols))
+}
+
+fn return_complex_matrix_vector(
+    args: &ReturnFieldArgs<'_>,
+    function_name: &str,
+) -> Result<(usize, usize)> {
+    let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], function_name, 1)?;
+    let (_vector_field, vector) =
+        parse_complex_vector_field(&args.arg_fields[1], function_name, 2)?;
+    if vector.len != matrix.cols {
+        return Err(exec_error(
+            function_name,
+            format!("rhs vector length mismatch: expected {}, found {}", matrix.cols, vector.len),
+        ));
+    }
+    Ok((matrix.rows, matrix.cols))
 }
 
 fn invoke_matrix_solver<T, E>(
@@ -168,6 +186,34 @@ where
         matrix_view.len_of(Axis(1)),
         &output,
     )?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+fn invoke_complex_matrix_matvec(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+) -> Result<ColumnarValue> {
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let rhs = expect_fixed_size_list_arg(args, 2, function_name)?;
+    let output =
+        nabled::arrow::tensor::cube_matvec_complex(args.arg_fields[0].as_ref(), matrices, rhs)
+            .map_err(|error| map_arrow_error(function_name, error))?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+fn invoke_complex_matrix_matmul(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+) -> Result<ColumnarValue> {
+    let left = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let right = expect_fixed_size_list_arg(args, 2, function_name)?;
+    let (_field, output) = nabled::arrow::tensor::cube_matmat_complex(
+        args.arg_fields[0].as_ref(),
+        left,
+        args.arg_fields[1].as_ref(),
+        right,
+    )
+    .map_err(|error| map_arrow_error(function_name, error))?;
     Ok(ColumnarValue::Array(Arc::new(output)))
 }
 
@@ -343,6 +389,142 @@ impl ScalarUDFImpl for MatrixMatvec {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixMatvecComplex {
+    signature: Signature,
+}
+
+impl MatrixMatvecComplex {
+    fn new() -> Self { Self { signature: any_signature(2) } }
+}
+
+impl ScalarUDFImpl for MatrixMatvecComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_matvec_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let (rows, _cols) = return_complex_matrix_vector(&args, self.name())?;
+        complex_vector_field(self.name(), rows, nullable_or(args.arg_fields))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let (_rhs_field, vector) = parse_complex_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if vector.len != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "rhs vector length mismatch: expected {}, found {}",
+                    matrix.cols, vector.len
+                ),
+            ));
+        }
+        invoke_complex_matrix_matvec(&args, self.name())
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Compute the row-wise dense complex matrix-vector product for paired matrix and \
+                 vector batches.",
+                "matrix_matvec_complex(matrix_batch, rhs_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument(
+                "rhs_batch",
+                "Dense complex vector batch containing one right-hand side per matrix row.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixMatmulComplex {
+    signature: Signature,
+}
+
+impl MatrixMatmulComplex {
+    fn new() -> Self { Self { signature: any_signature(2) } }
+}
+
+impl ScalarUDFImpl for MatrixMatmulComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_matmat_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let left = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_complex_matrix_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.cols != right.rows {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "incompatible matrix shapes for batched matmul: ({}, {}) x ({}, {})",
+                    left.rows, left.cols, right.rows, right.cols
+                ),
+            ));
+        }
+        complex_fixed_shape_tensor_field(
+            self.name(),
+            &[left.rows, right.cols],
+            nullable_or(args.arg_fields),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let left = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let right = parse_complex_matrix_batch_field(&args.arg_fields[1], self.name(), 2)?;
+        if left.cols != right.rows {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "incompatible matrix shapes for batched matmul: ({}, {}) x ({}, {})",
+                    left.rows, left.cols, right.rows, right.cols
+                ),
+            ));
+        }
+        invoke_complex_matrix_matmul(&args, self.name())
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Compute the row-wise dense complex matrix-matrix product for paired matrix \
+                 batches.",
+                "matrix_matmat_complex(left_batch, right_batch)",
+            )
+            .with_argument(
+                "left_batch",
+                "Left dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument(
+                "right_batch",
+                "Right dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct MatrixLuSolve {
     signature: Signature,
 }
@@ -476,8 +658,18 @@ pub fn matrix_matmul_udf() -> Arc<ScalarUDF> {
 }
 
 #[must_use]
+pub fn matrix_matmat_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixMatmulComplex::new()))
+}
+
+#[must_use]
 pub fn matrix_matvec_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixMatvec::new()))
+}
+
+#[must_use]
+pub fn matrix_matvec_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixMatvecComplex::new()))
 }
 
 #[must_use]

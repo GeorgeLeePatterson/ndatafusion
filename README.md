@@ -83,31 +83,35 @@ For the user-facing SQL catalog, see [CATALOG.md](https://github.com/GeorgeLeePa
 For quick copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
 For runnable examples, see `cargo run --example hello_sql`, `cargo run --example direct_arrow_vectors`, and `cargo run --example pca_pipeline`.
 
-`ndatafusion` registers a direct batch-native catalog across 82 scalar UDFs and 4 aggregate UDFs:
+`ndatafusion` registers a direct batch-native catalog across 94 scalar UDFs and 4 aggregate UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
 2. dense vector row ops plus complex-vector Hermitian dot / norm / cosine-similarity /
    normalization helpers over canonical `ndarrow.complex64` vectors
-3. dense matrix matvec, batched matmul, lower/upper triangular solves, and
+3. complex dense matrix matvec / matmat, complex matrix statistics, and complex dense iterative
+   solvers over canonical `arrow.fixed_shape_tensor<ndarrow.complex64>` matrix batches
+4. dense matrix matvec, batched matmul, lower/upper triangular solves, and
    LU/Cholesky/QR least-squares solves
-4. struct-valued LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD,
+5. struct-valued LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD,
    tolerance-thresholded SVD, symmetric/generalized eigen, Schur, polar, and PCA workflows
-5. matrix inverse, determinant, log-determinant, QR condition number / reconstruction,
+6. matrix inverse, determinant, log-determinant, QR condition number / reconstruction,
    SVD null-space / pseudo-inverse / condition number / rank / reconstruction,
    non-symmetric matrix balancing, Gram-Schmidt variants, zero-config matrix functions
    (`matrix_exp_eigen`, `matrix_log_eigen`, `matrix_log_svd`, `matrix_sign`), and configurable
    matrix functions (`matrix_exp`, `matrix_log_taylor`, `matrix_power`)
-6. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
-7. fixed-shape tensor last-axis reductions, normalization, batched products, row-wise
-   permutation/contraction, and variable-shape tensor last-axis workflows
-8. matrix column means, PCA fit plus PCA transform/inverse-transform, dense iterative solvers,
+7. sparse batch matvec, sparse-dense matmat, sparse transpose, and sparse-sparse matmat
+8. fixed-shape tensor last-axis reductions, normalization, batched products, row-wise
+   permutation/contraction, variable-shape tensor last-axis workflows, and the first complex
+   fixed-shape / variable-shape tensor norm / normalization surface
+9. matrix column means, PCA fit plus PCA transform/inverse-transform, dense iterative solvers,
    linear regression, and grouped aggregate fits for vector covariance/correlation/PCA and linear
    regression
-9. sparse direct solve via `sparse_lu_solve`
+10. sparse direct solve via `sparse_lu_solve`
 
 The current real-valued surface supports `Float32` and `Float64` across the implemented catalog.
-The current complex-valued surface covers canonical `ndarrow.complex64` dense vector inputs. The
+The current complex-valued surface covers canonical `ndarrow.complex64` dense vector, dense
+matrix, fixed-shape tensor, and variable-shape tensor inputs. The
 crate also has end-to-end SQL integration coverage for:
 
 1. literal-backed constructor pipelines
@@ -120,6 +124,7 @@ crate also has end-to-end SQL integration coverage for:
 8. sparse plus variable-shape tensor composition
 9. fixed-shape tensor constructor plus reduction pipelines
 10. fixed-shape tensor axis permutation / contraction queries
+11. direct canonical complex vector, matrix, and tensor queries without `make_*`
 
 ## License
 

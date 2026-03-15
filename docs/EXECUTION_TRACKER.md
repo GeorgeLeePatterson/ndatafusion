@@ -35,8 +35,8 @@ codebase.
 9. Publish hardening is now in place for the current git-consumed release posture, and the
    non-controversial real-valued catalog is now complete on the current constructor-backed surface.
 10. Post-v1 expansion work has now started on the current git-consumed tree via complex-vector
-    scalar UDFs, custom coercion, programmatic UDF documentation, and the first aggregate UDF
-    wave.
+    scalar UDFs, the first complex matrix/stat/tensor/iterative scalar slice, custom coercion,
+    programmatic UDF documentation, and the first aggregate UDF wave.
 
 ## V1 Publish Gate (Ordered, Required)
 
@@ -237,11 +237,26 @@ order:
       binary payloads
     - Arrow output materialization remains scoped to `evaluate`
     - local checks and coverage remain above the repository gate after the redesign
+29. `D-029`: `N-011` has advanced on the first complex matrix/tensor/stat/iterative slice:
+    - `matrix_matvec_complex` and `matrix_matmat_complex` now exist over canonical complex matrix
+      batches
+    - `matrix_column_means_complex`, `matrix_center_columns_complex`,
+      `matrix_covariance_complex`, and `matrix_correlation_complex` now exist over canonical
+      complex matrix batches
+    - `matrix_conjugate_gradient_complex` and `matrix_gmres_complex` now exist over canonical
+      complex square matrix/vector batches with named trailing control arguments
+    - `tensor_l2_norm_last_axis_complex`, `tensor_normalize_last_axis_complex`,
+      `tensor_variable_l2_norm_last_axis_complex`, and
+      `tensor_variable_normalize_last_axis_complex` now exist over canonical complex fixed-shape
+      and variable-shape tensor batches
+    - the registered catalog now exposes 94 scalar UDFs plus 4 aggregate UDFs
+    - direct SQL integration coverage now exercises canonical complex vector, matrix, and tensor
+      inputs without `make_*`
 
 ## Next
 
 1. `N-011` (`Layer 3`, `ndatafusion`): Plan and implement the next post-v1 surface explicitly:
-   - complex-valued matrix and tensor result contracts,
+   - richer complex decomposition and matrix-function result contracts,
    - callback-driven differentiation / optimization,
    - stateful sparse factorization reuse,
    - second-wave aggregate, window, table-function, and planner surfaces.

@@ -39,12 +39,29 @@ pub(crate) struct ComplexVectorContract {
     pub(crate) len: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComplexTensorBatchContract {
+    pub(crate) shape: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComplexMatrixBatchContract {
+    pub(crate) rows: usize,
+    pub(crate) cols: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComplexVariableShapeTensorContract {
+    pub(crate) dimensions:    usize,
+    pub(crate) uniform_shape: Option<Vec<Option<i32>>>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct FixedShapeTensorWireMetadata {
     shape: Vec<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct VariableShapeTensorWireMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     uniform_shape: Option<Vec<Option<i32>>>,
@@ -105,6 +122,42 @@ pub(crate) fn complex_vector_field(
         DataType::FixedSizeList(complex_scalar_field("item", false)?, value_length),
         nullable,
     )))
+}
+
+pub(crate) fn complex_fixed_shape_tensor_field(
+    name: &str,
+    tensor_shape: &[usize],
+    nullable: bool,
+) -> datafusion::common::Result<FieldRef> {
+    let list_size = tensor_shape.iter().try_fold(1_usize, |acc, dim| {
+        acc.checked_mul(*dim).ok_or_else(|| {
+            plan_error(name, format!("tensor shape product overflow for {tensor_shape:?}"))
+        })
+    })?;
+    let list_size = i32::try_from(list_size).map_err(|_| {
+        plan_error(
+            name,
+            format!("tensor element count exceeds Arrow i32 limits for {tensor_shape:?}"),
+        )
+    })?;
+
+    let item = complex_scalar_field("item", false)?;
+    let extension =
+        FixedShapeTensor::try_new(item.data_type().clone(), tensor_shape.to_vec(), None, None)
+            .map_err(|error| plan_error(name, error))?;
+    let data_type = DataType::FixedSizeList(field_like("item", &item, false), list_size);
+    extension.supports_data_type(&data_type).map_err(|error| plan_error(name, error))?;
+    let metadata =
+        serde_json::to_string(&FixedShapeTensorWireMetadata { shape: tensor_shape.to_vec() })
+            .map_err(|error| plan_error(name, error))?;
+    let mut field_metadata = HashMap::new();
+    drop(
+        field_metadata.insert("ARROW:extension:name".to_owned(), FixedShapeTensor::NAME.to_owned()),
+    );
+    drop(field_metadata.insert("ARROW:extension:metadata".to_owned(), metadata));
+    let mut field = Field::new(name, data_type, nullable);
+    field = field.with_metadata(field_metadata);
+    Ok(Arc::new(field))
 }
 
 pub(crate) fn struct_field(name: &str, fields: Vec<Field>, nullable: bool) -> FieldRef {
@@ -175,6 +228,51 @@ pub(crate) fn variable_shape_tensor_field(
     let data_type = DataType::Struct(
         vec![
             Field::new("data", DataType::new_list(value_type.clone(), false), false),
+            Field::new(
+                "shape",
+                DataType::new_fixed_size_list(DataType::Int32, dimensions_i32, false),
+                false,
+            ),
+        ]
+        .into(),
+    );
+    extension.supports_data_type(&data_type).map_err(|error| plan_error(name, error))?;
+    let metadata = serde_json::to_string(&VariableShapeTensorWireMetadata {
+        uniform_shape: uniform_shape.map(ToOwned::to_owned),
+    })
+    .map_err(|error| plan_error(name, error))?;
+    let mut field_metadata = HashMap::new();
+    drop(
+        field_metadata
+            .insert("ARROW:extension:name".to_owned(), VariableShapeTensor::NAME.to_owned()),
+    );
+    drop(field_metadata.insert("ARROW:extension:metadata".to_owned(), metadata));
+    let mut field = Field::new(name, data_type, nullable);
+    field = field.with_metadata(field_metadata);
+    Ok(Arc::new(field))
+}
+
+pub(crate) fn complex_variable_shape_tensor_field(
+    name: &str,
+    dimensions: usize,
+    uniform_shape: Option<&[Option<i32>]>,
+    nullable: bool,
+) -> datafusion::common::Result<FieldRef> {
+    let dimensions_i32 = i32::try_from(dimensions).map_err(|_| {
+        plan_error(name, format!("tensor rank {dimensions} exceeds Arrow i32 limits"))
+    })?;
+    let item = complex_scalar_field("item", false)?;
+    let extension = VariableShapeTensor::try_new(
+        item.data_type().clone(),
+        dimensions,
+        None,
+        None,
+        uniform_shape.map(ToOwned::to_owned),
+    )
+    .map_err(|error| plan_error(name, error))?;
+    let data_type = DataType::Struct(
+        vec![
+            Field::new("data", DataType::List(field_like("item", &item, false)), false),
             Field::new(
                 "shape",
                 DataType::new_fixed_size_list(DataType::Int32, dimensions_i32, false),
@@ -277,6 +375,131 @@ pub(crate) fn parse_complex_vector_field(
             actual,
         )),
     }
+}
+
+pub(crate) fn parse_complex_tensor_batch_field(
+    field: &FieldRef,
+    function_name: &str,
+    position: usize,
+) -> datafusion::common::Result<ComplexTensorBatchContract> {
+    let _extension = field
+        .try_extension_type::<FixedShapeTensor>()
+        .map_err(|error| plan_error(function_name, error))?;
+    let DataType::FixedSizeList(item, _len) = field.data_type() else {
+        return Err(type_mismatch(
+            function_name,
+            position,
+            "arrow.fixed_shape_tensor<ndarrow.complex64>",
+            field.data_type(),
+        ));
+    };
+    let _complex = item.try_extension_type::<Complex64Extension>().map_err(|_| {
+        type_mismatch(
+            function_name,
+            position,
+            "arrow.fixed_shape_tensor<ndarrow.complex64>",
+            field.data_type(),
+        )
+    })?;
+
+    let raw_metadata = field.extension_type_metadata().ok_or_else(|| {
+        plan_error(function_name, format!("argument {position} is missing tensor metadata"))
+    })?;
+    let metadata: FixedShapeTensorWireMetadata =
+        serde_json::from_str(raw_metadata).map_err(|error| plan_error(function_name, error))?;
+    Ok(ComplexTensorBatchContract { shape: metadata.shape })
+}
+
+pub(crate) fn parse_complex_matrix_batch_field(
+    field: &FieldRef,
+    function_name: &str,
+    position: usize,
+) -> datafusion::common::Result<ComplexMatrixBatchContract> {
+    let contract = parse_complex_tensor_batch_field(field, function_name, position)?;
+    if contract.shape.len() != 2 {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "argument {position} must be a batch of rank-2 complex matrices, found shape {:?}",
+                contract.shape
+            ),
+        ));
+    }
+    Ok(ComplexMatrixBatchContract { rows: contract.shape[0], cols: contract.shape[1] })
+}
+
+pub(crate) fn parse_complex_variable_shape_tensor_field(
+    field: &FieldRef,
+    function_name: &str,
+    position: usize,
+) -> datafusion::common::Result<ComplexVariableShapeTensorContract> {
+    if field.extension_type_name() != Some(VariableShapeTensor::NAME) {
+        return Err(type_mismatch(
+            function_name,
+            position,
+            "arrow.variable_shape_tensor<ndarrow.complex64>",
+            field.data_type(),
+        ));
+    }
+    let DataType::Struct(fields) = field.data_type() else {
+        return Err(type_mismatch(
+            function_name,
+            position,
+            "arrow.variable_shape_tensor<ndarrow.complex64>",
+            field.data_type(),
+        ));
+    };
+    let Some(data_field) = fields.first() else {
+        return Err(plan_error(
+            function_name,
+            format!("argument {position} variable tensor is missing its data field"),
+        ));
+    };
+    let DataType::List(item) = data_field.data_type() else {
+        return Err(type_mismatch(
+            function_name,
+            position,
+            "arrow.variable_shape_tensor<ndarrow.complex64>",
+            field.data_type(),
+        ));
+    };
+    let _complex = item.try_extension_type::<Complex64Extension>().map_err(|_| {
+        type_mismatch(
+            function_name,
+            position,
+            "arrow.variable_shape_tensor<ndarrow.complex64>",
+            field.data_type(),
+        )
+    })?;
+    let Some(shape_field) = fields.get(1) else {
+        return Err(plan_error(
+            function_name,
+            format!("argument {position} variable tensor is missing its shape field"),
+        ));
+    };
+    let DataType::FixedSizeList(_, dimensions_i32) = shape_field.data_type() else {
+        return Err(type_mismatch(
+            function_name,
+            position,
+            "arrow.variable_shape_tensor<ndarrow.complex64>",
+            field.data_type(),
+        ));
+    };
+    let dimensions = usize::try_from(*dimensions_i32).map_err(|_| {
+        plan_error(
+            function_name,
+            format!("argument {position} variable tensor has negative rank {dimensions_i32}"),
+        )
+    })?;
+    let uniform_shape = match field.extension_type_metadata() {
+        Some(raw_metadata) => {
+            let metadata: VariableShapeTensorWireMetadata = serde_json::from_str(raw_metadata)
+                .map_err(|error| plan_error(function_name, error))?;
+            metadata.uniform_shape
+        }
+        None => None,
+    };
+    Ok(ComplexVariableShapeTensorContract { dimensions, uniform_shape })
 }
 
 pub(crate) fn parse_tensor_batch_field(

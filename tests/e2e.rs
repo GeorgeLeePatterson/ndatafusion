@@ -12,7 +12,7 @@ use datafusion::common::utils::arrays_into_list_array;
 use datafusion::execution::FunctionRegistry;
 use datafusion::execution::registry::MemoryFunctionRegistry;
 use datafusion::prelude::SessionContext;
-use ndarray::{Array1, Array2, Array3, Ix1, Ix2, Ix3};
+use ndarray::{Array1, Array2, Array3, Array4, Ix1, Ix2, Ix3, Ix4};
 use num_complex::Complex64;
 
 fn assert_close(actual: f64, expected: f64) {
@@ -45,6 +45,46 @@ fn complex64_fixed_size_list_array(rows: Vec<Vec<Complex64>>) -> FixedSizeListAr
     let values = rows.into_iter().flatten().collect::<Vec<_>>();
     let array = Array2::from_shape_vec((row_count, width), values).expect("complex batch shape");
     ndarrow::array2_complex64_to_fixed_size_list(array).expect("complex batch")
+}
+
+fn complex64_matrix_batch<const B: usize, const R: usize, const C: usize>(
+    name: &str,
+    values: [[[Complex64; C]; R]; B],
+) -> (Field, FixedSizeListArray) {
+    let values = values.into_iter().flatten().flatten().collect::<Vec<_>>();
+    let array = Array3::from_shape_vec((B, R, C), values).expect("complex matrix batch shape");
+    let (field, array) = ndarrow::arrayd_complex64_to_fixed_shape_tensor(name, array.into_dyn())
+        .expect("complex matrix batch");
+    (field, array)
+}
+
+fn complex64_tensor_batch4<const B: usize, const D0: usize, const D1: usize, const D2: usize>(
+    name: &str,
+    values: [[[[Complex64; D2]; D1]; D0]; B],
+) -> (Field, FixedSizeListArray) {
+    let values = values.into_iter().flatten().flatten().flatten().collect::<Vec<_>>();
+    let array =
+        Array4::from_shape_vec((B, D0, D1, D2), values).expect("complex tensor batch shape");
+    let (field, array) = ndarrow::arrayd_complex64_to_fixed_shape_tensor(name, array.into_dyn())
+        .expect("complex tensor batch");
+    (field, array)
+}
+
+fn complex64_ragged_matrices(name: &str, rows: Vec<Vec<Vec<Complex64>>>) -> (Field, StructArray) {
+    let rows = rows
+        .into_iter()
+        .map(|matrix| {
+            let row_count = matrix.len();
+            let col_count = matrix.first().map_or(0, Vec::len);
+            let values = matrix.into_iter().flatten().collect::<Vec<_>>();
+            Array2::from_shape_vec((row_count, col_count), values)
+                .expect("complex ragged matrix batch shape")
+                .into_dyn()
+        })
+        .collect::<Vec<_>>();
+    let (field, array) = ndarrow::arrays_complex64_to_variable_shape_tensor(name, rows, None)
+        .expect("complex ragged tensors");
+    (field, array)
 }
 
 fn int32_list_array(rows: Vec<Vec<i32>>) -> ListArray {
@@ -184,6 +224,193 @@ fn assert_tensor_vector_struct_column(batch: &RecordBatch, index: usize, diagona
     assert_close(balanced[[0, 1, 1]], diagonal[1]);
     assert_close(scaling[[0, 0]], 1.0);
     assert_close(scaling[[0, 1]], 1.0);
+}
+
+fn direct_complex_matrix_batch() -> Result<RecordBatch> {
+    let (stats_field, stats_matrix) = complex64_matrix_batch("stats_matrix", [
+        [[Complex64::new(1.0, 1.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, 0.0),
+        ]],
+        [[Complex64::new(2.0, 0.0), Complex64::new(1.0, -1.0)], [
+            Complex64::new(1.0, 1.0),
+            Complex64::new(3.0, 0.0),
+        ]],
+    ]);
+    let (system_field, system_matrix) = complex64_matrix_batch("system_matrix", [
+        [[Complex64::new(4.0, 0.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(9.0, 0.0),
+        ]],
+        [[Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(5.0, 0.0),
+        ]],
+    ]);
+    let rhs = complex64_fixed_size_list_array(vec![
+        vec![Complex64::new(8.0, 0.0), Complex64::new(18.0, 0.0)],
+        vec![Complex64::new(4.0, 0.0), Complex64::new(10.0, 0.0)],
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        stats_field,
+        system_field,
+        Field::new("rhs_vector", rhs.data_type().clone(), false),
+    ]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(stats_matrix) as ArrayRef,
+        Arc::new(system_matrix) as ArrayRef,
+        Arc::new(rhs) as ArrayRef,
+    ])?)
+}
+
+fn assert_direct_complex_matrix_results(batch: &RecordBatch) {
+    assert_eq!(batch.num_rows(), 2);
+    assert_eq!(int64_column(batch, 0).values().as_ref(), &[1, 2]);
+
+    let matvec = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex matvec output");
+    let matvec = ndarrow::complex64_as_array_view2(matvec).expect("complex matvec output view");
+    assert_close(matvec[[0, 0]].re, 32.0);
+    assert_close(matvec[[0, 1]].re, 162.0);
+    assert_close(matvec[[1, 0]].re, 8.0);
+    assert_close(matvec[[1, 1]].re, 50.0);
+
+    let means = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex means output");
+    let means = ndarrow::complex64_as_array_view2(means).expect("complex means output view");
+    assert_close(means[[0, 0]].re, 0.5);
+    assert_close(means[[0, 0]].im, 0.5);
+    assert_close(means[[0, 1]].re, 1.0);
+    assert_close(means[[0, 1]].im, 0.0);
+    assert_close(means[[1, 0]].re, 1.5);
+    assert_close(means[[1, 0]].im, 0.5);
+    assert_close(means[[1, 1]].re, 2.0);
+    assert_close(means[[1, 1]].im, -0.5);
+
+    let cg =
+        batch.column(3).as_any().downcast_ref::<FixedSizeListArray>().expect("complex cg output");
+    let cg = ndarrow::complex64_as_array_view2(cg).expect("complex cg output view");
+    assert_close(cg[[0, 0]].re, 2.0);
+    assert_close(cg[[0, 1]].re, 2.0);
+    assert_close(cg[[1, 0]].re, 2.0);
+    assert_close(cg[[1, 1]].re, 2.0);
+
+    let gmres = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex gmres output");
+    let gmres = ndarrow::complex64_as_array_view2(gmres).expect("complex gmres output view");
+    assert_close(gmres[[0, 0]].re, 2.0);
+    assert_close(gmres[[0, 1]].re, 2.0);
+    assert_close(gmres[[1, 0]].re, 2.0);
+    assert_close(gmres[[1, 1]].re, 2.0);
+}
+
+fn direct_complex_tensor_batch() -> Result<RecordBatch> {
+    let (tensor_field, tensor) = complex64_tensor_batch4("tensor_batch", [[
+        [[Complex64::new(3.0, 4.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(5.0, 12.0),
+        ]],
+        [[Complex64::new(8.0, 15.0), Complex64::new(0.0, 0.0)], [
+            Complex64::new(7.0, 24.0),
+            Complex64::new(0.0, 0.0),
+        ]],
+    ]]);
+    let (ragged_field, ragged) = complex64_ragged_matrices("ragged_tensor", vec![vec![
+        vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, 0.0)],
+        vec![Complex64::new(5.0, 12.0), Complex64::new(0.0, 0.0)],
+    ]]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        tensor_field,
+        ragged_field,
+    ]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(tensor) as ArrayRef,
+        Arc::new(ragged) as ArrayRef,
+    ])?)
+}
+
+fn assert_direct_complex_tensor_results(batch: &RecordBatch) {
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(int64_column(batch, 0).value(0), 1);
+
+    let norm_field = batch.schema().field(1).clone();
+    let norm = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex tensor norm output");
+    let norm = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&norm_field, norm)
+        .expect("complex tensor norm view")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 norm output");
+    assert_close(norm[[0, 0, 0]], 5.0);
+    assert_close(norm[[0, 0, 1]], 13.0);
+    assert_close(norm[[0, 1, 0]], 17.0);
+    assert_close(norm[[0, 1, 1]], 25.0);
+
+    let normalized_field = batch.schema().field(2).clone();
+    let normalized = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex tensor normalize output");
+    let normalized =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&normalized_field, normalized)
+            .expect("complex tensor normalize view")
+            .into_dimensionality::<Ix4>()
+            .expect("rank-4 complex tensor output");
+    assert_close(normalized[[0, 0, 0, 0]].re, 0.6);
+    assert_close(normalized[[0, 0, 0, 0]].im, 0.8);
+    assert_close(normalized[[0, 0, 1, 0]].re, 0.0);
+    assert_close(normalized[[0, 0, 1, 0]].im, 0.0);
+    assert_close(normalized[[0, 1, 0, 0]].re, 8.0 / 17.0);
+    assert_close(normalized[[0, 1, 0, 0]].im, 15.0 / 17.0);
+
+    let ragged_norm_field = batch.schema().field(3).clone();
+    let ragged_norm = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("complex ragged norm output");
+    let mut ragged_norm =
+        ndarrow::variable_shape_tensor_iter::<Float64Type>(&ragged_norm_field, ragged_norm)
+            .expect("complex ragged norm iterator");
+    let (_, first_norm) = ragged_norm.next().expect("first ragged norm row").expect("first norm");
+    assert_close(first_norm[[0]], 5.0);
+    assert_close(first_norm[[1]], 13.0);
+    assert!(ragged_norm.next().is_none());
+
+    let ragged_normalized_field = batch.schema().field(4).clone();
+    let ragged_normalized = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("complex ragged normalize output");
+    let mut ragged_normalized =
+        ndarrow::complex64_variable_shape_tensor_iter(&ragged_normalized_field, ragged_normalized)
+            .expect("complex ragged normalize iterator");
+    let (_, first) = ragged_normalized
+        .next()
+        .expect("first ragged normalized row")
+        .expect("first ragged normalized tensor");
+    assert_close(first[[0, 0]].re, 0.6);
+    assert_close(first[[0, 0]].im, 0.8);
+    assert_close(first[[1, 0]].re, 5.0 / 13.0);
+    assert_close(first[[1, 0]].im, 12.0 / 13.0);
+    assert!(ragged_normalized.next().is_none());
 }
 
 #[test]
@@ -542,6 +769,67 @@ async fn sql_direct_complex_vector_queries_execute() -> Result<()> {
     assert_close(normalized[[1, 0]].im, 0.0);
     assert_close(normalized[[1, 1]].re, 1.0);
     assert_close(normalized[[1, 1]].im, 0.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_complex_matrix_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+    drop(ctx.register_batch("direct_complex_matrices", direct_complex_matrix_batch()?)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                matrix_matvec_complex(system_matrix, rhs_vector) AS matvec,
+                matrix_column_means_complex(stats_matrix) AS means,
+                matrix_conjugate_gradient_complex(
+                    system_matrix,
+                    rhs_vector,
+                    tolerance => 1e-8,
+                    max_iterations => 32
+                ) AS cg,
+                matrix_gmres_complex(
+                    system_matrix,
+                    rhs_vector,
+                    tolerance => 1e-8,
+                    max_iterations => 32
+                ) AS gmres
+             FROM direct_complex_matrices
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_direct_complex_matrix_results(&batches[0]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_complex_tensor_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+    drop(ctx.register_batch("direct_complex_tensors", direct_complex_tensor_batch()?)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                tensor_l2_norm_last_axis_complex(tensor_batch) AS norm,
+                tensor_normalize_last_axis_complex(tensor_batch) AS normalized,
+                tensor_variable_l2_norm_last_axis_complex(ragged_tensor) AS ragged_norm,
+                tensor_variable_normalize_last_axis_complex(ragged_tensor) AS ragged_normalized
+             FROM direct_complex_tensors",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_direct_complex_tensor_results(&batches[0]);
     Ok(())
 }
 

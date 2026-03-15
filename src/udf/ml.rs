@@ -14,15 +14,18 @@ use ndarray::{Array1, Array2, Array3, ArrayView2, ArrayView3, Axis};
 use ndarrow::NdarrowElement;
 
 use super::common::{
-    expect_bool_scalar_arg, expect_bool_scalar_argument, expect_fixed_size_list_arg,
-    expect_struct_arg, fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows,
-    fixed_size_list_view2, nullable_or, primitive_array_from_values,
+    complex_fixed_shape_tensor_array_from_flat_rows, complex_fixed_shape_tensor_view3,
+    complex_fixed_size_list_array_from_flat_rows, expect_bool_scalar_arg,
+    expect_bool_scalar_argument, expect_fixed_size_list_arg, expect_struct_arg,
+    fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows, fixed_size_list_view2,
+    nullable_or, primitive_array_from_values,
 };
 use super::docs::ml_doc;
 use crate::error::{exec_error, plan_error};
 use crate::metadata::{
-    MatrixBatchContract, fixed_shape_tensor_field, parse_matrix_batch_field, parse_vector_field,
-    scalar_field, struct_field, vector_field,
+    MatrixBatchContract, complex_fixed_shape_tensor_field, complex_vector_field,
+    fixed_shape_tensor_field, parse_complex_matrix_batch_field, parse_matrix_batch_field,
+    parse_vector_field, scalar_field, struct_field, vector_field,
 };
 use crate::signatures::{
     ScalarCoercion, any_signature, coerce_scalar_arguments, named_any_signature,
@@ -77,6 +80,62 @@ where
         .map_err(|error| exec_error(function_name, error))?;
     let (_field, output) = ndarrow::arrayd_to_fixed_shape_tensor(function_name, output.into_dyn())
         .map_err(|error| exec_error(function_name, error))?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+fn invoke_complex_matrix_batch_to_vector_output<E>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    op: impl Fn(
+        &ArrayView2<'_, num_complex::Complex64>,
+    ) -> std::result::Result<Array1<num_complex::Complex64>, E>,
+) -> Result<ColumnarValue>
+where
+    E: std::fmt::Display,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], matrices, function_name)?;
+    let batch = matrix_view.len_of(Axis(0));
+    let cols = matrix_view.len_of(Axis(2));
+    let mut output = Vec::with_capacity(batch * cols);
+    for row in 0..batch {
+        let values = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
+        output.extend(values.iter().copied());
+    }
+    let output = complex_fixed_size_list_array_from_flat_rows(function_name, batch, cols, output)?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+fn invoke_complex_matrix_batch_to_tensor_output<E>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    output_rows: usize,
+    output_cols: usize,
+    op: impl Fn(
+        &ArrayView2<'_, num_complex::Complex64>,
+    ) -> std::result::Result<Array2<num_complex::Complex64>, E>,
+) -> Result<ColumnarValue>
+where
+    E: std::fmt::Display,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], matrices, function_name)?;
+    let batch = matrix_view.len_of(Axis(0));
+    let mut output = Vec::with_capacity(batch * output_rows * output_cols);
+    for row in 0..batch {
+        let values = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
+        output.extend(values.iter().copied());
+    }
+    let (_field, output) = complex_fixed_shape_tensor_array_from_flat_rows(
+        function_name,
+        batch,
+        &[output_rows, output_cols],
+        output,
+    )?;
     Ok(ColumnarValue::Array(Arc::new(output)))
 }
 
@@ -774,6 +833,230 @@ impl ScalarUDFImpl for MatrixCorrelation {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixColumnMeansComplex {
+    signature: Signature,
+}
+
+impl MatrixColumnMeansComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixColumnMeansComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_column_means_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        complex_vector_field(self.name(), matrix.cols, args.arg_fields[0].is_nullable())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let _matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        invoke_complex_matrix_batch_to_vector_output(&args, self.name(), |view| {
+            Ok::<_, datafusion::common::DataFusionError>(
+                nabled::ml::stats::column_means_complex_view(view),
+            )
+        })
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Compute row-wise complex column means for a batch of dense complex matrices.",
+                "matrix_column_means_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixCenterColumnsComplex {
+    signature: Signature,
+}
+
+impl MatrixCenterColumnsComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixCenterColumnsComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_center_columns_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        complex_fixed_shape_tensor_field(
+            self.name(),
+            &[matrix.rows, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        invoke_complex_matrix_batch_to_tensor_output(
+            &args,
+            self.name(),
+            matrix.rows,
+            matrix.cols,
+            |view| {
+                Ok::<_, datafusion::common::DataFusionError>(
+                    nabled::ml::stats::center_columns_complex_view(view),
+                )
+            },
+        )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Center the columns of each dense complex matrix in the batch.",
+                "matrix_center_columns_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixCovarianceComplex {
+    signature: Signature,
+}
+
+impl MatrixCovarianceComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixCovarianceComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_covariance_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        complex_fixed_shape_tensor_field(
+            self.name(),
+            &[matrix.cols, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        invoke_complex_matrix_batch_to_tensor_output(
+            &args,
+            self.name(),
+            matrix.cols,
+            matrix.cols,
+            nabled::ml::stats::covariance_matrix_complex_view,
+        )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Compute the row-wise complex covariance matrix for a batch of dense complex \
+                 matrices.",
+                "matrix_covariance_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixCorrelationComplex {
+    signature: Signature,
+}
+
+impl MatrixCorrelationComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixCorrelationComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_correlation_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        complex_fixed_shape_tensor_field(
+            self.name(),
+            &[matrix.cols, matrix.cols],
+            args.arg_fields[0].is_nullable(),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        invoke_complex_matrix_batch_to_tensor_output(
+            &args,
+            self.name(),
+            matrix.cols,
+            matrix.cols,
+            nabled::ml::stats::correlation_matrix_complex_view,
+        )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Compute the row-wise complex correlation matrix for a batch of dense complex \
+                 matrices.",
+                "matrix_correlation_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct MatrixPca {
     signature: Signature,
 }
@@ -1126,8 +1409,18 @@ pub fn matrix_column_means_udf() -> Arc<ScalarUDF> {
 }
 
 #[must_use]
+pub fn matrix_column_means_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixColumnMeansComplex::new()))
+}
+
+#[must_use]
 pub fn matrix_center_columns_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixCenterColumns::new()))
+}
+
+#[must_use]
+pub fn matrix_center_columns_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixCenterColumnsComplex::new()))
 }
 
 #[must_use]
@@ -1136,8 +1429,18 @@ pub fn matrix_covariance_udf() -> Arc<ScalarUDF> {
 }
 
 #[must_use]
+pub fn matrix_covariance_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixCovarianceComplex::new()))
+}
+
+#[must_use]
 pub fn matrix_correlation_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixCorrelation::new()))
+}
+
+#[must_use]
+pub fn matrix_correlation_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixCorrelationComplex::new()))
 }
 
 #[must_use]

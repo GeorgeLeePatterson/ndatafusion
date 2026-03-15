@@ -80,8 +80,18 @@ pub fn vector_normalize_complex(vector: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn matrix_matvec_complex(matrix: Expr, vector: Expr) -> Expr {
+    udfs::matrix_matvec_complex_udf().call(vec![matrix, vector])
+}
+
+#[must_use]
 pub fn matrix_matvec(matrix: Expr, vector: Expr) -> Expr {
     udfs::matrix_matvec_udf().call(vec![matrix, vector])
+}
+
+#[must_use]
+pub fn matrix_matmat_complex(left: Expr, right: Expr) -> Expr {
+    udfs::matrix_matmat_complex_udf().call(vec![left, right])
 }
 
 #[must_use]
@@ -297,8 +307,18 @@ pub fn tensor_l2_norm_last_axis(tensor: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn tensor_l2_norm_last_axis_complex(tensor: Expr) -> Expr {
+    udfs::tensor_l2_norm_last_axis_complex_udf().call(vec![tensor])
+}
+
+#[must_use]
 pub fn tensor_normalize_last_axis(tensor: Expr) -> Expr {
     udfs::tensor_normalize_last_axis_udf().call(vec![tensor])
+}
+
+#[must_use]
+pub fn tensor_normalize_last_axis_complex(tensor: Expr) -> Expr {
+    udfs::tensor_normalize_last_axis_complex_udf().call(vec![tensor])
 }
 
 #[must_use]
@@ -339,8 +359,18 @@ pub fn tensor_variable_l2_norm_last_axis(tensor: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn tensor_variable_l2_norm_last_axis_complex(tensor: Expr) -> Expr {
+    udfs::tensor_variable_l2_norm_last_axis_complex_udf().call(vec![tensor])
+}
+
+#[must_use]
 pub fn tensor_variable_normalize_last_axis(tensor: Expr) -> Expr {
     udfs::tensor_variable_normalize_last_axis_udf().call(vec![tensor])
+}
+
+#[must_use]
+pub fn tensor_variable_normalize_last_axis_complex(tensor: Expr) -> Expr {
+    udfs::tensor_variable_normalize_last_axis_complex_udf().call(vec![tensor])
 }
 
 #[must_use]
@@ -354,16 +384,36 @@ pub fn matrix_column_means(matrix: Expr) -> Expr {
 }
 
 #[must_use]
+pub fn matrix_column_means_complex(matrix: Expr) -> Expr {
+    udfs::matrix_column_means_complex_udf().call(vec![matrix])
+}
+
+#[must_use]
 pub fn matrix_center_columns(matrix: Expr) -> Expr {
     udfs::matrix_center_columns_udf().call(vec![matrix])
+}
+
+#[must_use]
+pub fn matrix_center_columns_complex(matrix: Expr) -> Expr {
+    udfs::matrix_center_columns_complex_udf().call(vec![matrix])
 }
 
 #[must_use]
 pub fn matrix_covariance(matrix: Expr) -> Expr { udfs::matrix_covariance_udf().call(vec![matrix]) }
 
 #[must_use]
+pub fn matrix_covariance_complex(matrix: Expr) -> Expr {
+    udfs::matrix_covariance_complex_udf().call(vec![matrix])
+}
+
+#[must_use]
 pub fn matrix_correlation(matrix: Expr) -> Expr {
     udfs::matrix_correlation_udf().call(vec![matrix])
+}
+
+#[must_use]
+pub fn matrix_correlation_complex(matrix: Expr) -> Expr {
+    udfs::matrix_correlation_complex_udf().call(vec![matrix])
 }
 
 #[must_use]
@@ -390,8 +440,28 @@ pub fn matrix_conjugate_gradient(
 }
 
 #[must_use]
+pub fn matrix_conjugate_gradient_complex(
+    matrix: Expr,
+    rhs: Expr,
+    tolerance: Expr,
+    max_iterations: Expr,
+) -> Expr {
+    udfs::matrix_conjugate_gradient_complex_udf().call(vec![matrix, rhs, tolerance, max_iterations])
+}
+
+#[must_use]
 pub fn matrix_gmres(matrix: Expr, rhs: Expr, tolerance: Expr, max_iterations: Expr) -> Expr {
     udfs::matrix_gmres_udf().call(vec![matrix, rhs, tolerance, max_iterations])
+}
+
+#[must_use]
+pub fn matrix_gmres_complex(
+    matrix: Expr,
+    rhs: Expr,
+    tolerance: Expr,
+    max_iterations: Expr,
+) -> Expr {
+    udfs::matrix_gmres_complex_udf().call(vec![matrix, rhs, tolerance, max_iterations])
 }
 
 #[must_use]
@@ -425,26 +495,32 @@ mod tests {
     use super::{
         linear_regression, linear_regression_fit, make_csr_matrix_batch, make_matrix, make_tensor,
         make_variable_tensor, make_vector, matrix_balance_nonsymmetric, matrix_center_columns,
-        matrix_cholesky, matrix_cholesky_inverse, matrix_cholesky_solve, matrix_column_means,
-        matrix_conjugate_gradient, matrix_correlation, matrix_covariance, matrix_determinant,
-        matrix_eigen_generalized, matrix_eigen_symmetric, matrix_exp, matrix_exp_eigen,
-        matrix_gmres, matrix_gram_schmidt, matrix_gram_schmidt_classic, matrix_inverse,
-        matrix_log_determinant, matrix_log_eigen, matrix_log_svd, matrix_log_taylor, matrix_lu,
-        matrix_lu_solve, matrix_matmul, matrix_matvec, matrix_pca, matrix_pca_inverse_transform,
-        matrix_pca_transform, matrix_polar, matrix_power, matrix_qr, matrix_qr_condition_number,
-        matrix_qr_pivoted, matrix_qr_reconstruct, matrix_qr_reduced, matrix_qr_solve_least_squares,
-        matrix_schur, matrix_sign, matrix_solve_lower, matrix_solve_lower_matrix,
-        matrix_solve_upper, matrix_solve_upper_matrix, matrix_svd, matrix_svd_condition_number,
-        matrix_svd_null_space, matrix_svd_pseudo_inverse, matrix_svd_rank, matrix_svd_reconstruct,
-        matrix_svd_truncated, matrix_svd_with_tolerance, sparse_lu_solve, sparse_matmat_dense,
-        sparse_matmat_sparse, sparse_matvec, sparse_transpose, tensor_batched_dot_last_axis,
-        tensor_batched_matmul_last_two, tensor_contract_axes, tensor_l2_norm_last_axis,
-        tensor_normalize_last_axis, tensor_permute_axes, tensor_sum_last_axis,
-        tensor_variable_batched_dot_last_axis, tensor_variable_l2_norm_last_axis,
-        tensor_variable_normalize_last_axis, tensor_variable_sum_last_axis, vector_correlation_agg,
-        vector_cosine_distance, vector_cosine_similarity, vector_cosine_similarity_complex,
-        vector_covariance_agg, vector_dot, vector_dot_hermitian, vector_l2_norm,
-        vector_l2_norm_complex, vector_normalize, vector_normalize_complex, vector_pca_fit,
+        matrix_center_columns_complex, matrix_cholesky, matrix_cholesky_inverse,
+        matrix_cholesky_solve, matrix_column_means, matrix_column_means_complex,
+        matrix_conjugate_gradient, matrix_conjugate_gradient_complex, matrix_correlation,
+        matrix_correlation_complex, matrix_covariance, matrix_covariance_complex,
+        matrix_determinant, matrix_eigen_generalized, matrix_eigen_symmetric, matrix_exp,
+        matrix_exp_eigen, matrix_gmres, matrix_gmres_complex, matrix_gram_schmidt,
+        matrix_gram_schmidt_classic, matrix_inverse, matrix_log_determinant, matrix_log_eigen,
+        matrix_log_svd, matrix_log_taylor, matrix_lu, matrix_lu_solve, matrix_matmat_complex,
+        matrix_matmul, matrix_matvec, matrix_matvec_complex, matrix_pca,
+        matrix_pca_inverse_transform, matrix_pca_transform, matrix_polar, matrix_power, matrix_qr,
+        matrix_qr_condition_number, matrix_qr_pivoted, matrix_qr_reconstruct, matrix_qr_reduced,
+        matrix_qr_solve_least_squares, matrix_schur, matrix_sign, matrix_solve_lower,
+        matrix_solve_lower_matrix, matrix_solve_upper, matrix_solve_upper_matrix, matrix_svd,
+        matrix_svd_condition_number, matrix_svd_null_space, matrix_svd_pseudo_inverse,
+        matrix_svd_rank, matrix_svd_reconstruct, matrix_svd_truncated, matrix_svd_with_tolerance,
+        sparse_lu_solve, sparse_matmat_dense, sparse_matmat_sparse, sparse_matvec,
+        sparse_transpose, tensor_batched_dot_last_axis, tensor_batched_matmul_last_two,
+        tensor_contract_axes, tensor_l2_norm_last_axis, tensor_l2_norm_last_axis_complex,
+        tensor_normalize_last_axis, tensor_normalize_last_axis_complex, tensor_permute_axes,
+        tensor_sum_last_axis, tensor_variable_batched_dot_last_axis,
+        tensor_variable_l2_norm_last_axis, tensor_variable_l2_norm_last_axis_complex,
+        tensor_variable_normalize_last_axis, tensor_variable_normalize_last_axis_complex,
+        tensor_variable_sum_last_axis, vector_correlation_agg, vector_cosine_distance,
+        vector_cosine_similarity, vector_cosine_similarity_complex, vector_covariance_agg,
+        vector_dot, vector_dot_hermitian, vector_l2_norm, vector_l2_norm_complex, vector_normalize,
+        vector_normalize_complex, vector_pca_fit,
     };
 
     fn literal_i64(value: i64) -> Expr { Expr::Literal(ScalarValue::Int64(Some(value)), None) }
@@ -529,7 +605,17 @@ mod tests {
             "vector_normalize_complex",
             1,
         );
+        assert_scalar_function(
+            matrix_matvec_complex(one.clone(), two.clone()),
+            "matrix_matvec_complex",
+            2,
+        );
         assert_scalar_function(matrix_matvec(one.clone(), two.clone()), "matrix_matvec", 2);
+        assert_scalar_function(
+            matrix_matmat_complex(one.clone(), two.clone()),
+            "matrix_matmat_complex",
+            2,
+        );
         assert_scalar_function(matrix_matmul(one.clone(), two.clone()), "matrix_matmul", 2);
         assert_scalar_function(
             matrix_solve_lower(one.clone(), two.clone()),
@@ -687,8 +773,18 @@ mod tests {
             1,
         );
         assert_scalar_function(
+            tensor_l2_norm_last_axis_complex(one.clone()),
+            "tensor_l2_norm_last_axis_complex",
+            1,
+        );
+        assert_scalar_function(
             tensor_normalize_last_axis(one.clone()),
             "tensor_normalize_last_axis",
+            1,
+        );
+        assert_scalar_function(
+            tensor_normalize_last_axis_complex(one.clone()),
+            "tensor_normalize_last_axis_complex",
             1,
         );
         assert_scalar_function(
@@ -722,8 +818,18 @@ mod tests {
             1,
         );
         assert_scalar_function(
+            tensor_variable_l2_norm_last_axis_complex(one.clone()),
+            "tensor_variable_l2_norm_last_axis_complex",
+            1,
+        );
+        assert_scalar_function(
             tensor_variable_normalize_last_axis(one.clone()),
             "tensor_variable_normalize_last_axis",
+            1,
+        );
+        assert_scalar_function(
+            tensor_variable_normalize_last_axis_complex(one.clone()),
+            "tensor_variable_normalize_last_axis_complex",
             1,
         );
         assert_scalar_function(
@@ -741,9 +847,29 @@ mod tests {
         let four = literal_i64(4);
 
         assert_scalar_function(matrix_column_means(one.clone()), "matrix_column_means", 1);
+        assert_scalar_function(
+            matrix_column_means_complex(one.clone()),
+            "matrix_column_means_complex",
+            1,
+        );
         assert_scalar_function(matrix_center_columns(one.clone()), "matrix_center_columns", 1);
+        assert_scalar_function(
+            matrix_center_columns_complex(one.clone()),
+            "matrix_center_columns_complex",
+            1,
+        );
         assert_scalar_function(matrix_covariance(one.clone()), "matrix_covariance", 1);
+        assert_scalar_function(
+            matrix_covariance_complex(one.clone()),
+            "matrix_covariance_complex",
+            1,
+        );
         assert_scalar_function(matrix_correlation(one.clone()), "matrix_correlation", 1);
+        assert_scalar_function(
+            matrix_correlation_complex(one.clone()),
+            "matrix_correlation_complex",
+            1,
+        );
         assert_scalar_function(matrix_pca(one.clone()), "matrix_pca", 1);
         assert_scalar_function(
             matrix_pca_transform(one.clone(), two.clone()),
@@ -761,8 +887,23 @@ mod tests {
             4,
         );
         assert_scalar_function(
+            matrix_conjugate_gradient_complex(
+                one.clone(),
+                two.clone(),
+                three.clone(),
+                four.clone(),
+            ),
+            "matrix_conjugate_gradient_complex",
+            4,
+        );
+        assert_scalar_function(
             matrix_gmres(one.clone(), two.clone(), three.clone(), four),
             "matrix_gmres",
+            4,
+        );
+        assert_scalar_function(
+            matrix_gmres_complex(one.clone(), two.clone(), three.clone(), literal_i64(4)),
+            "matrix_gmres_complex",
             4,
         );
         assert_scalar_function(linear_regression(one, two, three), "linear_regression", 3);

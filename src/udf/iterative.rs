@@ -13,13 +13,17 @@ use ndarray::{Array1, ArrayView1, ArrayView2, Axis};
 use ndarrow::NdarrowElement;
 
 use super::common::{
+    complex_fixed_shape_tensor_view3, complex_fixed_size_list_array_from_flat_rows,
     expect_fixed_size_list_arg, expect_real_scalar_arg, expect_real_scalar_argument,
     expect_usize_scalar_arg, expect_usize_scalar_argument, fixed_shape_tensor_view3,
     fixed_size_list_array_from_flat_rows, fixed_size_list_view2, nullable_or,
 };
 use super::docs::iterative_doc;
 use crate::error::exec_error;
-use crate::metadata::{parse_matrix_batch_field, parse_vector_field, vector_field};
+use crate::metadata::{
+    complex_vector_field, parse_complex_matrix_batch_field, parse_complex_vector_field,
+    parse_matrix_batch_field, parse_vector_field, vector_field,
+};
 use crate::signatures::{ScalarCoercion, coerce_scalar_arguments, named_user_defined_signature};
 
 fn return_square_system(
@@ -50,6 +54,28 @@ fn return_square_system(
         ));
     }
     Ok((matrix.value_type, matrix.rows))
+}
+
+fn return_square_complex_system(args: &ReturnFieldArgs<'_>, function_name: &str) -> Result<usize> {
+    let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], function_name, 1)?;
+    let (_vector_field, vector) =
+        parse_complex_vector_field(&args.arg_fields[1], function_name, 2)?;
+    if matrix.rows != matrix.cols {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "{function_name} requires square matrices, found ({}, {})",
+                matrix.rows, matrix.cols
+            ),
+        ));
+    }
+    if vector.len != matrix.cols {
+        return Err(exec_error(
+            function_name,
+            format!("rhs vector length mismatch: expected {}, found {}", matrix.cols, vector.len),
+        ));
+    }
+    Ok(matrix.rows)
 }
 
 fn validate_tolerance(function_name: &str, tolerance: f64) -> Result<f64> {
@@ -158,6 +184,72 @@ where
         rhs_view.nrows(),
         rhs_view.ncols(),
         &output,
+    )?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+fn invoke_complex_iterative_solver<E>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    config: &nabled::ml::iterative::IterativeConfig<f64>,
+    op: impl Fn(
+        &ArrayView2<'_, num_complex::Complex64>,
+        &ArrayView1<'_, num_complex::Complex64>,
+        &nabled::ml::iterative::IterativeConfig<f64>,
+    ) -> std::result::Result<Array1<num_complex::Complex64>, E>,
+) -> Result<ColumnarValue>
+where
+    E: std::fmt::Display,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let rhs = expect_fixed_size_list_arg(args, 2, function_name)?;
+    let matrix_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], matrices, function_name)?;
+    let rhs_view =
+        ndarrow::complex64_as_array_view2(rhs).map_err(|error| exec_error(function_name, error))?;
+    if matrix_view.len_of(Axis(0)) != rhs_view.nrows() {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "batch length mismatch: {} matrices vs {} rhs vectors",
+                matrix_view.len_of(Axis(0)),
+                rhs_view.nrows()
+            ),
+        ));
+    }
+    if matrix_view.len_of(Axis(1)) != matrix_view.len_of(Axis(2)) {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "{function_name} requires square matrices, found ({}, {})",
+                matrix_view.len_of(Axis(1)),
+                matrix_view.len_of(Axis(2))
+            ),
+        ));
+    }
+    if rhs_view.ncols() != matrix_view.len_of(Axis(2)) {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "rhs vector length mismatch: expected {}, found {}",
+                matrix_view.len_of(Axis(2)),
+                rhs_view.ncols()
+            ),
+        ));
+    }
+
+    let mut output = Vec::with_capacity(rhs_view.len());
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let solution =
+            op(&matrix_view.index_axis(Axis(0), row), &rhs_view.index_axis(Axis(0), row), config)
+                .map_err(|error| exec_error(function_name, error))?;
+        output.extend(solution.iter().copied());
+    }
+    let output = complex_fixed_size_list_array_from_flat_rows(
+        function_name,
+        rhs_view.nrows(),
+        rhs_view.ncols(),
+        output,
     )?;
     Ok(ColumnarValue::Array(Arc::new(output)))
 }
@@ -423,6 +515,218 @@ impl ScalarUDFImpl for MatrixGmres {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixConjugateGradientComplex {
+    signature: Signature,
+}
+
+impl MatrixConjugateGradientComplex {
+    fn new() -> Self {
+        Self {
+            signature: named_user_defined_signature(&[
+                "matrix",
+                "rhs",
+                "tolerance",
+                "max_iterations",
+            ]),
+        }
+    }
+}
+
+impl ScalarUDFImpl for MatrixConjugateGradientComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_conjugate_gradient_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[
+            (3, ScalarCoercion::Real),
+            (4, ScalarCoercion::Integer),
+        ])
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let len = return_square_complex_system(&args, self.name())?;
+        let tolerance = expect_real_scalar_argument(&args, 3, self.name())?;
+        let max_iterations = expect_usize_scalar_argument(&args, 4, self.name())?;
+        let _ = validate_tolerance(self.name(), tolerance)?;
+        let _ = validate_max_iterations(self.name(), max_iterations)?;
+        complex_vector_field(self.name(), len, nullable_or(args.arg_fields))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let (_rhs_field, vector) = parse_complex_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        if vector.len != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "rhs vector length mismatch: expected {}, found {}",
+                    matrix.cols, vector.len
+                ),
+            ));
+        }
+        let tolerance = expect_real_scalar_arg(&args, 3, self.name())?;
+        let max_iterations = expect_usize_scalar_arg(&args, 4, self.name())?;
+        let config = iterative_config_f64(self.name(), tolerance, max_iterations)?;
+        invoke_complex_iterative_solver(
+            &args,
+            self.name(),
+            &config,
+            nabled::ml::iterative::conjugate_gradient_complex_view,
+        )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            iterative_doc(
+                "Solve each square complex linear system in the batch with conjugate gradient.",
+                "matrix_conjugate_gradient_complex(matrix_batch, rhs_batch, tolerance => 1e-6, \
+                 max_iterations => 64)",
+            )
+            .with_argument(
+                "matrix",
+                "Square dense complex matrix batch in canonical fixed-shape tensor form.",
+            )
+            .with_argument(
+                "rhs",
+                "Dense complex vector batch containing one right-hand side per matrix row.",
+            )
+            .with_argument("tolerance", "Positive finite convergence tolerance.")
+            .with_argument("max_iterations", "Positive integer iteration cap.")
+            .with_alternative_syntax(
+                "matrix_conjugate_gradient_complex(matrix => matrix_batch, rhs => rhs_batch, \
+                 tolerance => 1e-6, max_iterations => 64)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixGmresComplex {
+    signature: Signature,
+}
+
+impl MatrixGmresComplex {
+    fn new() -> Self {
+        Self {
+            signature: named_user_defined_signature(&[
+                "matrix",
+                "rhs",
+                "tolerance",
+                "max_iterations",
+            ]),
+        }
+    }
+}
+
+impl ScalarUDFImpl for MatrixGmresComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_gmres_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[
+            (3, ScalarCoercion::Real),
+            (4, ScalarCoercion::Integer),
+        ])
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let len = return_square_complex_system(&args, self.name())?;
+        let tolerance = expect_real_scalar_argument(&args, 3, self.name())?;
+        let max_iterations = expect_usize_scalar_argument(&args, 4, self.name())?;
+        let _ = validate_tolerance(self.name(), tolerance)?;
+        let _ = validate_max_iterations(self.name(), max_iterations)?;
+        complex_vector_field(self.name(), len, nullable_or(args.arg_fields))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let (_rhs_field, vector) = parse_complex_vector_field(&args.arg_fields[1], self.name(), 2)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        if vector.len != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "rhs vector length mismatch: expected {}, found {}",
+                    matrix.cols, vector.len
+                ),
+            ));
+        }
+        let tolerance = expect_real_scalar_arg(&args, 3, self.name())?;
+        let max_iterations = expect_usize_scalar_arg(&args, 4, self.name())?;
+        let config = iterative_config_f64(self.name(), tolerance, max_iterations)?;
+        invoke_complex_iterative_solver(
+            &args,
+            self.name(),
+            &config,
+            nabled::ml::iterative::gmres_complex_view,
+        )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            iterative_doc(
+                "Solve each square complex linear system in the batch with GMRES.",
+                "matrix_gmres_complex(matrix_batch, rhs_batch, tolerance => 1e-6, max_iterations \
+                 => 64)",
+            )
+            .with_argument(
+                "matrix",
+                "Square dense complex matrix batch in canonical fixed-shape tensor form.",
+            )
+            .with_argument(
+                "rhs",
+                "Dense complex vector batch containing one right-hand side per matrix row.",
+            )
+            .with_argument("tolerance", "Positive finite convergence tolerance.")
+            .with_argument("max_iterations", "Positive integer iteration cap.")
+            .with_alternative_syntax(
+                "matrix_gmres_complex(matrix => matrix_batch, rhs => rhs_batch, tolerance => \
+                 1e-6, max_iterations => 64)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
 #[must_use]
 pub fn matrix_conjugate_gradient_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixConjugateGradient::new()))
@@ -431,6 +735,16 @@ pub fn matrix_conjugate_gradient_udf() -> Arc<ScalarUDF> {
 #[must_use]
 pub fn matrix_gmres_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixGmres::new()))
+}
+
+#[must_use]
+pub fn matrix_conjugate_gradient_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixConjugateGradientComplex::new()))
+}
+
+#[must_use]
+pub fn matrix_gmres_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixGmresComplex::new()))
 }
 
 #[cfg(test)]
