@@ -1,6 +1,6 @@
 # Capability Matrix
 
-Last updated: 2026-03-14
+Last updated: 2026-03-15
 
 ## Purpose
 
@@ -31,16 +31,16 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 | Upstream prerequisite | checkpoint 2: `nabled` release-ready concept-first Arrow façade | Implemented | published `0.0.7` | Stable and published for local `ndatafusion` adoption. |
 | Dependency surface | `nabled` dependency and feature forwarding | Implemented | `Cargo.toml` + `just checks` | `ndatafusion` now depends on published `nabled 0.0.7`, enables `nabled/arrow` unconditionally, and mirrors the remaining feature flags one-for-one. |
 | Publication channel | crates.io-ready dependency posture | Partial | docs + `Cargo.toml` | `ndatafusion` still depends on DataFusion from git because the published release line does not yet satisfy the Arrow 58 contract; crates.io publication remains blocked until that changes. |
-| Extension crate shape | `register_all`, `functions`, and `udfs` public surface | Implemented | `src/` + tests | Public registration/catalog surface now exists and registers a non-empty numerical catalog directly. |
+| Extension crate shape | `register_all`, `functions`, `udfs`, and `udafs` public surface | Implemented | `src/` + tests | Public registration/catalog surface now exists and registers non-empty scalar and aggregate numerical catalogs directly. |
 | Data contract layer | shared DataType/Field builders for vector, matrix, tensor, sparse, and complex values | Implemented | `src/metadata.rs` + tests | Shared field builders and validation helpers now own the first SQL-facing numerical contracts. |
 | Direct batch delegation | whole-array delegation into stabilized `nabled::arrow` contracts | Partial | unit tests | Present for the first vector, matrix, sparse, and tensor slices; residual unsupported workflows still fall back to direct ndarray view iteration or remain unimplemented. |
 | Cell codec layer | row extraction and result assembly for lifted `nabled` contracts | Missing | No | Fallback-only layer for workflows that still lack a direct batch-native lower-layer path. |
-| Dense vector surface | row-wise vector kernels (`dot`, norms, cosine, pairwise/batched where natural) | Partial | unit tests | `l2_norm`, `dot`, `cosine_similarity`, `cosine_distance`, and `normalize` now exist for `rows-of-vectors` over `FixedSizeList<Float32|Float64>(D)`. |
+| Dense vector surface | row-wise vector kernels (`dot`, norms, cosine, pairwise/batched where natural) | Partial | unit tests | Real-valued `l2_norm`, `dot`, `cosine_similarity`, `cosine_distance`, and `normalize` now exist for `rows-of-vectors` over `FixedSizeList<Float32|Float64>(D)`, and the current complex-vector subset now covers Hermitian dot, norm, cosine similarity, and normalization over canonical `ndarrow.complex64` vectors. |
 | Dense matrix surface | row-wise matrix kernels and helpers | Partial | unit tests + SQL e2e | Row-wise `matrix_matvec`, batched matrix-matrix product, lower/upper triangular solves, lower/upper triangular matrix solves, zero-config matrix functions, and configurable matrix exponential / logarithm / power helpers now exist over square fixed-shape tensor matrix batches plus fixed-size-list vector batches. |
 | Decomposition surface | struct-returning factorization and solver contracts | Partial | unit tests + SQL e2e | LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD, tolerance-thresholded SVD, SVD null-space, symmetric/generalized eigen, non-symmetric balancing, Schur, and polar helpers now exist, along with direct QR condition-number / reconstruction, SVD pseudo-inverse / rank / condition-number / reconstruction, and Gram-Schmidt helpers; residual complex, nonsymmetric spectral, and other config-heavy workflows still remain. |
 | Sparse surface | CSR-aware DataFusion contracts and wrappers | Partial | unit tests | Sparse batch matvec, direct solve, dense matmat, transpose, and sparse matmat now exist over `ndarrow.csr_matrix_batch`. |
 | Tensor surface | fixed-shape tensor contracts and wrappers | Partial | unit tests + SQL e2e | Fixed-shape last-axis reductions, normalization, batched products, and row-wise axis permutation / contraction now exist alongside the admitted variable-shape last-axis workflows on the real-valued surface. |
-| ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests + SQL e2e | Column means, centering, covariance, correlation, PCA fit / transform / inverse-transform, dense iterative solvers, and linear regression now exist; callback/config-heavy workflows still remain. |
+| ML/stat surface | DataFusion wrappers for iterative, jacobian, optimization, PCA, regression, stats | Partial | unit tests + SQL e2e | Column means, centering, covariance, correlation, PCA fit / transform / inverse-transform, dense iterative solvers, linear regression, and the first grouped aggregate wave (`vector_covariance_agg`, `vector_correlation_agg`, `vector_pca_fit`, `linear_regression_fit`) now exist; callback/config-heavy workflows still remain. |
 | SQL usability | constructors and normalizers from SQL-friendly nested values into canonical contracts | Implemented | unit tests | `make_vector`, `make_matrix`, `make_tensor`, `make_variable_tensor`, and `make_csr_matrix_batch` now cover the admitted real-valued canonical contracts from SQL-style `List` values plus scalar dimensions. |
 | Planner layer | function rewrites or expression planners | Missing | No | Optional for v1 unless required by constructors or ergonomics. |
 | Hardening | examples, integration coverage, docs, and publish checklist readiness | Implemented | `just checks` + `cargo doc --no-default-features --no-deps` | Contract-edge unit coverage, README quick-start examples, crate-level docs, docs.rs metadata, and an explicit publish checklist now exist for the current constructor-backed catalog. |
@@ -75,7 +75,7 @@ Operational sequencing (`Done / Next / Needed`) lives in `docs/EXECUTION_TRACKER
 
 | Capability Group | Current Status | Gap |
 |---|---|---|
-| UDAFs and window functions | Missing | Defer until scalar-UDF-first surface is stable and justified. |
+| UDAFs and window functions | Partial | The first grouped aggregate wave is now implemented; ordered windowed workflows remain deferred. |
 | Table functions and planner rewrites | Missing | Add only when they provide clear ergonomic or semantic value. |
 | Residual fallback optimization | Missing | After v1, reduce the cost of any remaining lift/assembly fallback paths that could not be eliminated. |
 | Richer SQL sugar and alternate result contracts | Missing | Explicitly admit only after core contracts stabilize. |

@@ -1,12 +1,13 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::FixedSizeListArray;
 use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use ndarray::{Array3, Axis};
 use ndarrow::NdarrowElement;
@@ -15,9 +16,12 @@ use super::common::{
     expect_fixed_size_list_arg, expect_real_scalar_arg, expect_real_scalar_argument,
     expect_usize_scalar_arg, expect_usize_scalar_argument, fixed_shape_tensor_view3, nullable_or,
 };
+use super::docs::matrix_doc;
 use crate::error::exec_error;
 use crate::metadata::{fixed_shape_tensor_field, parse_matrix_batch_field};
-use crate::signatures::any_signature;
+use crate::signatures::{
+    ScalarCoercion, any_signature, coerce_scalar_arguments, named_user_defined_signature,
+};
 
 fn validate_square_matrix_contract(
     function_name: &str,
@@ -116,7 +120,9 @@ struct MatrixExp {
 }
 
 impl MatrixExp {
-    fn new() -> Self { Self { signature: any_signature(3) } }
+    fn new() -> Self {
+        Self { signature: named_user_defined_signature(&["matrix", "max_terms", "tolerance"]) }
+    }
 }
 
 impl ScalarUDFImpl for MatrixExp {
@@ -125,6 +131,13 @@ impl ScalarUDFImpl for MatrixExp {
     fn name(&self) -> &'static str { "matrix_exp" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[
+            (2, ScalarCoercion::Integer),
+            (3, ScalarCoercion::Real),
+        ])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -167,6 +180,26 @@ impl ScalarUDFImpl for MatrixExp {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Compute a configurable matrix exponential over a batch of square matrices.",
+                "matrix_exp(matrix_batch, max_terms => 32, tolerance => 1e-6)",
+            )
+            .with_argument(
+                "matrix",
+                "Square dense matrix batch in canonical fixed-shape tensor form.",
+            )
+            .with_argument("max_terms", "Positive integer maximum number of series terms.")
+            .with_argument("tolerance", "Positive finite convergence tolerance.")
+            .with_alternative_syntax(
+                "matrix_exp(matrix => matrix_batch, max_terms => 32, tolerance => 1e-6)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -228,7 +261,9 @@ struct MatrixLogTaylor {
 }
 
 impl MatrixLogTaylor {
-    fn new() -> Self { Self { signature: any_signature(3) } }
+    fn new() -> Self {
+        Self { signature: named_user_defined_signature(&["matrix", "max_terms", "tolerance"]) }
+    }
 }
 
 impl ScalarUDFImpl for MatrixLogTaylor {
@@ -237,6 +272,13 @@ impl ScalarUDFImpl for MatrixLogTaylor {
     fn name(&self) -> &'static str { "matrix_log_taylor" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[
+            (2, ScalarCoercion::Integer),
+            (3, ScalarCoercion::Real),
+        ])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -283,6 +325,27 @@ impl ScalarUDFImpl for MatrixLogTaylor {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Compute a configurable matrix logarithm with a Taylor-series path over a batch \
+                 of square matrices.",
+                "matrix_log_taylor(matrix_batch, max_terms => 32, tolerance => 1e-6)",
+            )
+            .with_argument(
+                "matrix",
+                "Square dense matrix batch in canonical fixed-shape tensor form.",
+            )
+            .with_argument("max_terms", "Positive integer maximum number of series terms.")
+            .with_argument("tolerance", "Positive finite convergence tolerance.")
+            .with_alternative_syntax(
+                "matrix_log_taylor(matrix => matrix_batch, max_terms => 32, tolerance => 1e-6)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -396,7 +459,7 @@ struct MatrixPower {
 }
 
 impl MatrixPower {
-    fn new() -> Self { Self { signature: any_signature(2) } }
+    fn new() -> Self { Self { signature: named_user_defined_signature(&["matrix", "power"]) } }
 }
 
 impl ScalarUDFImpl for MatrixPower {
@@ -405,6 +468,10 @@ impl ScalarUDFImpl for MatrixPower {
     fn name(&self) -> &'static str { "matrix_power" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[(2, ScalarCoercion::Real)])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -445,6 +512,23 @@ impl ScalarUDFImpl for MatrixPower {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Raise each square matrix in the batch to a scalar power.",
+                "matrix_power(matrix_batch, power => 2.0)",
+            )
+            .with_argument(
+                "matrix",
+                "Square dense matrix batch in canonical fixed-shape tensor form.",
+            )
+            .with_argument("power", "Finite scalar exponent applied to each matrix.")
+            .with_alternative_syntax("matrix_power(matrix => matrix_batch, power => 2.0)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 

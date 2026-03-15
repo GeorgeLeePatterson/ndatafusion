@@ -13,6 +13,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::execution::registry::MemoryFunctionRegistry;
 use datafusion::prelude::SessionContext;
 use ndarray::{Array1, Array2, Array3, Ix1, Ix2, Ix3};
+use num_complex::Complex64;
 
 fn assert_close(actual: f64, expected: f64) {
     let delta = (actual - expected).abs();
@@ -36,6 +37,14 @@ fn float32_fixed_size_list_array(rows: Vec<Vec<f32>>) -> FixedSizeListArray {
         rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
         i32::try_from(width).expect("fixed-size-list width should fit i32"),
     )
+}
+
+fn complex64_fixed_size_list_array(rows: Vec<Vec<Complex64>>) -> FixedSizeListArray {
+    let row_count = rows.len();
+    let width = rows.first().map_or(0, Vec::len);
+    let values = rows.into_iter().flatten().collect::<Vec<_>>();
+    let array = Array2::from_shape_vec((row_count, width), values).expect("complex batch shape");
+    ndarrow::array2_complex64_to_fixed_size_list(array).expect("complex batch")
 }
 
 fn int32_list_array(rows: Vec<Vec<i32>>) -> ListArray {
@@ -216,6 +225,46 @@ async fn sql_literal_constructor_pipeline_executes() -> Result<()> {
     assert_close(float64_column(&batches[0], 0).value(0), 12.0);
     assert_close(float64_column(&batches[0], 1).value(0), 1.0);
     assert_close(float64_column(&batches[0], 2).value(0), 36.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_named_argument_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                vector_l2_norm(make_vector(values => left_values, dimension => 2)) AS norm,
+                matrix_determinant(make_matrix(values => matrix_values, rows => 2, cols => 2)) AS \
+             det,
+                matrix_power(
+                    make_matrix(values => matrix_values, rows => 2, cols => 2),
+                    power => 2.0
+                ) AS squared,
+                matrix_exp(
+                    make_matrix(values => identity_values, rows => 2, cols => 2),
+                    tolerance => 1e-6,
+                    max_terms => 12
+                ) AS expm
+             FROM (
+                SELECT
+                    [3.0, 4.0] AS left_values,
+                    [2.0, 0.0, 0.0, 3.0] AS matrix_values,
+                    [1.0, 0.0, 0.0, 1.0] AS identity_values
+             )",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_close(float64_column(&batches[0], 0).value(0), 5.0);
+    assert_close(float64_column(&batches[0], 1).value(0), 6.0);
+    assert_eq!(batches[0].column(2).len(), 1);
+    assert_eq!(batches[0].column(3).len(), 1);
     Ok(())
 }
 
@@ -403,6 +452,242 @@ async fn sql_direct_fixed_size_list_vector_queries_execute() -> Result<()> {
     assert_close32(float32_column(&batches[0], 2).value(1), 48.0);
     assert_close32(float32_column(&batches[0], 3).value(0), 0.6);
     assert_close32(float32_column(&batches[0], 3).value(1), 0.8);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_complex_vector_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let left = complex64_fixed_size_list_array(vec![
+        vec![Complex64::new(1.0, 1.0), Complex64::new(0.0, 0.0)],
+        vec![Complex64::new(0.0, 0.0), Complex64::new(2.0, 0.0)],
+    ]);
+    let right = complex64_fixed_size_list_array(vec![
+        vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
+        vec![Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)],
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("left_vector", left.data_type().clone(), false),
+        Field::new("right_vector", right.data_type().clone(), false),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(left) as ArrayRef,
+        Arc::new(right) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("direct_complex_vectors", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                vector_dot_hermitian(left_vector, right_vector) AS dot,
+                vector_l2_norm_complex(left_vector) AS norm,
+                vector_cosine_similarity_complex(left_vector, right_vector) AS similarity,
+                vector_normalize_complex(left_vector) AS normalized
+             FROM direct_complex_vectors
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 2);
+    assert_eq!(int64_column(&batches[0], 0).values().as_ref(), &[1, 2]);
+
+    let dot_field = batches[0].schema().field(1).clone();
+    let dots = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex scalar column");
+    let dots = ndarrow::complex64_as_array_view1(dot_field.as_ref(), dots).expect("complex dots");
+    assert_close(dots[0].re, 1.0);
+    assert_close(dots[0].im, -1.0);
+    assert_close(dots[1].re, 0.0);
+    assert_close(dots[1].im, 0.0);
+
+    assert_close(float64_column(&batches[0], 2).value(0), 2.0_f64.sqrt());
+    assert_close(float64_column(&batches[0], 2).value(1), 2.0);
+
+    let similarity_field = batches[0].schema().field(3).clone();
+    let similarities = batches[0]
+        .column(3)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex similarity column");
+    let similarities = ndarrow::complex64_as_array_view1(similarity_field.as_ref(), similarities)
+        .expect("complex similarities");
+    assert_close(similarities[0].re, 0.5);
+    assert_close(similarities[0].im, -0.5);
+    assert_close(similarities[1].re, 0.0);
+    assert_close(similarities[1].im, 0.0);
+
+    let normalized = batches[0]
+        .column(4)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("normalized complex vectors");
+    let normalized =
+        ndarrow::complex64_as_array_view2(normalized).expect("normalized complex vector view");
+    assert_close(normalized[[0, 0]].re, 1.0 / 2.0_f64.sqrt());
+    assert_close(normalized[[0, 0]].im, 1.0 / 2.0_f64.sqrt());
+    assert_close(normalized[[0, 1]].re, 0.0);
+    assert_close(normalized[[0, 1]].im, 0.0);
+    assert_close(normalized[[1, 0]].re, 0.0);
+    assert_close(normalized[[1, 0]].im, 0.0);
+    assert_close(normalized[[1, 1]].re, 1.0);
+    assert_close(normalized[[1, 1]].im, 0.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_vector_aggregate_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let observation = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+        vec![
+            Some(vec![Some(1.0), Some(2.0)]),
+            Some(vec![Some(3.0), Some(4.0)]),
+            Some(vec![Some(5.0), Some(6.0)]),
+        ],
+        2,
+    );
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("observation", observation.data_type().clone(), false),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(vec![1_i64, 2, 3])) as ArrayRef,
+            Arc::new(observation) as ArrayRef,
+        ],
+    )?;
+    drop(ctx.register_batch("agg_vectors", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                vector_covariance_agg(observation) AS covariance,
+                vector_correlation_agg(observation) AS correlation,
+                vector_pca_fit(observation) AS pca
+             FROM agg_vectors",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+
+    let covariance_field = batches[0].schema().field(0).clone();
+    let covariance = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("covariance output");
+    let covariance =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&covariance_field, covariance)
+            .expect("covariance tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 covariance tensor");
+    assert_close(covariance[[0, 0, 0]], 4.0);
+    assert_close(covariance[[0, 0, 1]], 4.0);
+    assert_close(covariance[[0, 1, 0]], 4.0);
+    assert_close(covariance[[0, 1, 1]], 4.0);
+
+    let correlation_field = batches[0].schema().field(1).clone();
+    let correlation = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("correlation output");
+    let correlation =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&correlation_field, correlation)
+            .expect("correlation tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 correlation tensor");
+    assert_close(correlation[[0, 0, 0]], 1.0);
+    assert_close(correlation[[0, 0, 1]], 1.0);
+    assert_close(correlation[[0, 1, 0]], 1.0);
+    assert_close(correlation[[0, 1, 1]], 1.0);
+
+    let pca_field = batches[0].schema().field(2).clone();
+    let DataType::Struct(fields) = pca_field.data_type() else {
+        panic!("expected PCA struct output");
+    };
+    let pca = struct_column(&batches[0], 2);
+    let components =
+        pca.column(0).as_any().downcast_ref::<StructArray>().expect("components variable tensor");
+    let mut components = ndarrow::variable_shape_tensor_iter::<Float64Type>(&fields[0], components)
+        .expect("components iterator");
+    let components = components.next().expect("first component batch").expect("component tensor");
+    let components = components.1.into_dimensionality::<Ix2>().expect("component matrix");
+    assert_eq!(components.shape(), &[2, 2]);
+    let mean = pca.column(3).as_any().downcast_ref::<FixedSizeListArray>().expect("mean vector");
+    let mean = ndarrow::fixed_size_list_as_array2::<Float64Type>(mean).expect("mean vector view");
+    assert_close(mean[[0, 0]], 3.0);
+    assert_close(mean[[0, 1]], 4.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_linear_regression_fit_aggregate_query_executes() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let design = float32_fixed_size_list_array(vec![vec![1.0], vec![2.0], vec![3.0]]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("design", design.data_type().clone(), false),
+        Field::new("response", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(schema, vec![
+        Arc::new(design) as ArrayRef,
+        Arc::new(Int64Array::from(vec![2_i64, 4, 6])) as ArrayRef,
+    ])?;
+    drop(ctx.register_batch("agg_regression", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT linear_regression_fit(design, response, add_intercept => false) AS fit
+             FROM agg_regression",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+    let fit_field = batches[0].schema().field(0).clone();
+    let DataType::Struct(fields) = fit_field.data_type() else {
+        panic!("expected regression struct output");
+    };
+    let fit = struct_column(&batches[0], 0);
+    let coefficients = fit
+        .column(0)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("coefficients variable tensor");
+    let mut coefficients =
+        ndarrow::variable_shape_tensor_iter::<Float32Type>(&fields[0], coefficients)
+            .expect("coefficients iterator");
+    let coefficients = coefficients
+        .next()
+        .expect("first coefficients batch")
+        .expect("coefficient tensor")
+        .1
+        .into_dimensionality::<Ix1>()
+        .expect("coefficient vector");
+    assert_eq!(coefficients.len(), 1);
+    assert_close32(coefficients[0], 2.0);
+    let r_squared =
+        fit.column(1).as_any().downcast_ref::<Float32Array>().expect("r_squared scalar");
+    assert_close32(r_squared.value(0), 1.0);
     Ok(())
 }
 

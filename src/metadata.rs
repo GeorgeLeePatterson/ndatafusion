@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arrow_schema::extension::{ExtensionType, FixedShapeTensor, VariableShapeTensor};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use ndarrow::CsrMatrixBatchExtension;
+use ndarrow::{Complex64Extension, CsrMatrixBatchExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{plan_error, type_mismatch};
@@ -34,6 +34,11 @@ pub(crate) struct VariableShapeTensorContract {
     pub(crate) uniform_shape: Option<Vec<Option<i32>>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComplexVectorContract {
+    pub(crate) len: usize,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct FixedShapeTensorWireMetadata {
     shape: Vec<usize>,
@@ -61,6 +66,18 @@ pub(crate) fn scalar_field(name: &str, value_type: &DataType, nullable: bool) ->
     Arc::new(Field::new(name, value_type.clone(), nullable))
 }
 
+pub(crate) fn complex_scalar_field(
+    name: &str,
+    nullable: bool,
+) -> datafusion::common::Result<FieldRef> {
+    let mut field =
+        Field::new(name, DataType::new_fixed_size_list(DataType::Float64, 2, false), nullable);
+    field
+        .try_with_extension_type(Complex64Extension)
+        .map_err(|error| plan_error(name, error))?;
+    Ok(Arc::new(field))
+}
+
 pub(crate) fn vector_field(
     name: &str,
     value_type: &DataType,
@@ -72,6 +89,20 @@ pub(crate) fn vector_field(
     Ok(Arc::new(Field::new(
         name,
         DataType::new_fixed_size_list(value_type.clone(), value_length, false),
+        nullable,
+    )))
+}
+
+pub(crate) fn complex_vector_field(
+    name: &str,
+    len: usize,
+    nullable: bool,
+) -> datafusion::common::Result<FieldRef> {
+    let value_length = i32::try_from(len)
+        .map_err(|_| plan_error(name, format!("vector length {len} exceeds Arrow i32 limits")))?;
+    Ok(Arc::new(Field::new(
+        name,
+        DataType::FixedSizeList(complex_scalar_field("item", false)?, value_length),
         nullable,
     )))
 }
@@ -216,6 +247,38 @@ pub(crate) fn parse_vector_field(
     }
 }
 
+pub(crate) fn parse_complex_vector_field(
+    field: &FieldRef,
+    function_name: &str,
+    position: usize,
+) -> datafusion::common::Result<(FieldRef, ComplexVectorContract)> {
+    match field.data_type() {
+        DataType::FixedSizeList(item, len) => {
+            let _extension = item.try_extension_type::<Complex64Extension>().map_err(|_| {
+                type_mismatch(
+                    function_name,
+                    position,
+                    "FixedSizeList<ndarrow.complex64>(D)",
+                    field.data_type(),
+                )
+            })?;
+            let len = usize::try_from(*len).map_err(|_| {
+                plan_error(
+                    function_name,
+                    format!("argument {position} has negative vector width {len}"),
+                )
+            })?;
+            Ok((Arc::clone(item), ComplexVectorContract { len }))
+        }
+        actual => Err(type_mismatch(
+            function_name,
+            position,
+            "FixedSizeList<ndarrow.complex64>(D)",
+            actual,
+        )),
+    }
+}
+
 pub(crate) fn parse_tensor_batch_field(
     field: &FieldRef,
     function_name: &str,
@@ -304,13 +367,16 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::extension::ExtensionType;
+    use datafusion::arrow::array::Array;
     use datafusion::arrow::datatypes::{DataType, Field};
-    use ndarray::{Array1, Array3};
-    use ndarrow::CsrMatrixBatchExtension;
+    use ndarray::{Array1, Array2, Array3};
+    use ndarrow::{Complex64Extension, CsrMatrixBatchExtension};
+    use num_complex::Complex64;
 
     use super::{
-        FixedShapeTensorWireMetadata, VariableShapeTensorWireMetadata, csr_matrix_batch_field,
-        field_like, fixed_shape_tensor_field, parse_csr_matrix_batch_field,
+        ComplexVectorContract, FixedShapeTensorWireMetadata, VariableShapeTensorWireMetadata,
+        complex_scalar_field, complex_vector_field, csr_matrix_batch_field, field_like,
+        fixed_shape_tensor_field, parse_complex_vector_field, parse_csr_matrix_batch_field,
         parse_matrix_batch_field, parse_tensor_batch_field, parse_variable_shape_tensor_field,
         parse_vector_field, scalar_field, struct_field, variable_shape_tensor_field, vector_field,
     };
@@ -318,7 +384,10 @@ mod tests {
     #[test]
     fn field_builders_create_expected_shapes() {
         let scalar = scalar_field("score", &DataType::Float64, true);
+        let complex_scalar = complex_scalar_field("complex", false).expect("complex scalar field");
         let vector = vector_field("vector", &DataType::Float32, 3, false).expect("vector field");
+        let complex_vector =
+            complex_vector_field("complex_vector", 2, true).expect("complex vector field");
         let structure = struct_field("pair", vec![Field::new("x", DataType::Float64, false)], true);
         let tensor = fixed_shape_tensor_field("tensor", &DataType::Float32, &[2, 3], false)
             .expect("tensor field");
@@ -335,7 +404,20 @@ mod tests {
 
         assert_eq!(scalar.data_type(), &DataType::Float64);
         assert!(scalar.is_nullable());
+        assert_eq!(
+            complex_scalar.extension_type_name().expect("complex extension"),
+            Complex64Extension::NAME
+        );
         assert_eq!(vector.data_type(), &DataType::new_fixed_size_list(DataType::Float32, 3, false));
+        let DataType::FixedSizeList(item, len) = complex_vector.data_type() else {
+            panic!("expected complex vector storage");
+        };
+        assert_eq!(*len, 2);
+        assert_eq!(
+            item.extension_type_name().expect("complex item extension"),
+            Complex64Extension::NAME
+        );
+        assert!(complex_vector.is_nullable());
         assert!(matches!(structure.data_type(), DataType::Struct(_)));
         assert_eq!(
             tensor.extension_type_name().expect("tensor extension name"),
@@ -386,6 +468,25 @@ mod tests {
     #[test]
     fn parse_helpers_accept_expected_contracts() {
         let vector = vector_field("vector", &DataType::Float64, 3, false).expect("vector field");
+        let complex_vectors = {
+            let array = Array2::from_shape_vec((2, 3), vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(-1.0, 0.5),
+                Complex64::new(3.0, 0.0),
+                Complex64::new(0.0, -2.0),
+            ])
+            .expect("complex matrix");
+            Arc::new(Field::new(
+                "complex_vectors",
+                ndarrow::array2_complex64_to_fixed_size_list(array)
+                    .expect("complex outbound")
+                    .data_type()
+                    .clone(),
+                false,
+            ))
+        };
         let tensor = fixed_shape_tensor_field("tensor", &DataType::Float64, &[2, 3], false)
             .expect("tensor field");
         let ragged =
@@ -403,6 +504,11 @@ mod tests {
         let vector_contract = parse_vector_field(&vector, "vector_dot", 1).expect("vector len");
         assert_eq!(vector_contract.value_type, DataType::Float64);
         assert_eq!(vector_contract.len, 3);
+        let (complex_item_field, complex_contract) =
+            parse_complex_vector_field(&complex_vectors, "vector_dot_hermitian", 1)
+                .expect("complex vector len");
+        assert_eq!(complex_item_field.extension_type_name(), Some(Complex64Extension::NAME));
+        assert_eq!(complex_contract, ComplexVectorContract { len: 3 });
         let tensor_contract =
             parse_tensor_batch_field(&tensor, "matrix_matmul", 1).expect("tensor shape");
         assert_eq!(tensor_contract.value_type, DataType::Float64);
@@ -427,6 +533,15 @@ mod tests {
     fn parse_helpers_reject_mismatches_and_missing_metadata() {
         let scalar = scalar_field("scalar", &DataType::Float64, false);
         let vector = vector_field("vector", &DataType::Float64, 4, false).expect("vector field");
+        let plain_nested_complex = Arc::new(Field::new(
+            "complex_vectors",
+            DataType::new_fixed_size_list(
+                DataType::new_fixed_size_list(DataType::Float64, 2, false),
+                3,
+                false,
+            ),
+            false,
+        ));
         let rank_three = fixed_shape_tensor_field("tensor", &DataType::Float64, &[2, 3, 4], false)
             .expect("rank-3 tensor");
         let mut tensor_metadata = HashMap::new();
@@ -466,6 +581,9 @@ mod tests {
 
         let scalar_error =
             parse_vector_field(&scalar, "vector_dot", 1).expect_err("vector type mismatch");
+        let complex_error =
+            parse_complex_vector_field(&plain_nested_complex, "vector_dot_hermitian", 1)
+                .expect_err("complex vector type mismatch");
         let tensor_error = parse_tensor_batch_field(&vector, "matrix_matmul", 1)
             .expect_err("tensor type mismatch");
         let rank_error = parse_matrix_batch_field(&rank_three, "matrix_matmul", 1)
@@ -480,6 +598,7 @@ mod tests {
             parse_csr_matrix_batch_field(&scalar, "sparse_matvec", 1).expect_err("csr mismatch");
 
         assert!(scalar_error.to_string().contains("expected FixedSizeList<Float32|Float64>(D)"));
+        assert!(complex_error.to_string().contains("expected FixedSizeList<ndarrow.complex64>(D)"));
         assert!(tensor_error.to_string().contains("matrix_matmul"));
         assert!(rank_error.to_string().contains("batch of rank-2 matrices"));
         assert!(missing_fixed_error.to_string().contains("matrix_matmul"));

@@ -1,6 +1,7 @@
 pub(crate) mod common;
 pub mod constructors;
 pub mod decomposition;
+pub(crate) mod docs;
 pub mod iterative;
 pub mod matrix;
 pub mod matrix_functions;

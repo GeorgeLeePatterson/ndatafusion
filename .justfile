@@ -1,4 +1,5 @@
 LOG := env('RUST_LOG', '')
+coverage_ignore_regex := ".*/examples/.*|.*/src/udf/docs.rs"
 provider_features := env('NDATAFUSION_PROVIDER_FEATURES', 'openblas-system')
 provider_env_prefix := if os() == "macos" { "env PKG_CONFIG_PATH=/opt/homebrew/opt/openblas/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}} OPENBLAS_DIR=/opt/homebrew/opt/openblas" } else { "env" }
 
@@ -26,12 +27,12 @@ test-integration test_name='':
 coverage:
     cargo llvm-cov clean --workspace
     cargo llvm-cov --no-default-features --lib --tests --no-report
-    cargo llvm-cov report -vv --html --ignore-filename-regex ".*/examples/.*" --output-dir coverage --open
+    cargo llvm-cov report -vv --html --ignore-filename-regex "{{ coverage_ignore_regex }}" --output-dir coverage --open
 
 coverage-lcov:
     cargo llvm-cov clean --workspace
     cargo llvm-cov --no-default-features --lib --tests --no-report
-    cargo llvm-cov report --lcov --ignore-filename-regex ".*/examples/.*" --output-path lcov.info
+    cargo llvm-cov report --lcov --ignore-filename-regex "{{ coverage_ignore_regex }}" --output-path lcov.info
 
 # --- EXAMPLES ---
 

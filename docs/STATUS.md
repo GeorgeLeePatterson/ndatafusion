@@ -1,6 +1,6 @@
 # Status Snapshot
 
-Last updated: 2026-03-14
+Last updated: 2026-03-15
 
 ## Summary
 
@@ -67,6 +67,21 @@ top of the released upstream contracts.
 25. The sparse direct-solve slice now also covers `sparse_lu_solve` over canonical
     `ndarrow.csr_matrix_batch` plus rank-1 variable-shape tensor batches, with direct unit
     coverage, float32 type-propagation coverage, and constructor-backed SQL integration coverage.
+26. The current scalar catalog now also covers canonical complex-vector workflows:
+    `vector_dot_hermitian`, `vector_l2_norm_complex`, `vector_cosine_similarity_complex`, and
+    `vector_normalize_complex` over `FixedSizeList<ndarrow.complex64>(D)`.
+27. Shared signature handling now supports custom coercion for constructor dimensions, scalar
+    controls, and the first aggregate regression fit, while keeping the structural `make_*`
+    constructors as the explicit contract boundary.
+28. Programmatic `documentation()` is now present across constructors, the main scalar operational
+    surface, and the first aggregate wave.
+29. The crate now also exposes a first aggregate UDF wave via `register_all`:
+    - `vector_covariance_agg`
+    - `vector_correlation_agg`
+    - `vector_pca_fit`
+    - `linear_regression_fit`
+30. The registered catalog now spans 82 scalar UDFs plus 4 aggregate UDFs, with named-argument
+    support for selected constructors, scalar control arguments, and `linear_regression_fit`.
 
 ## Current Repository Reality
 
@@ -74,7 +89,7 @@ top of the released upstream contracts.
    integration coverage.
 2. There is no `docs/` implementation history before this planning baseline.
 3. A larger internal module tree now exists for registration, shared metadata/signature/error
-   helpers, and domain UDFs.
+   helpers, scalar domain UDFs, and aggregate UDFs.
 4. Direct batch-native delegation now exists across the admitted vector, matrix, sparse, and
    tensor workflows whenever `nabled::arrow` exposes the needed batch carrier directly.
 5. The fallback generic cell-codec layer still does not exist; residual unsupported workflows are
@@ -83,7 +98,7 @@ top of the released upstream contracts.
    real-valued vector, matrix, tensor, variable-tensor, and CSR sparse-batch contracts.
 7. README-level quick-start examples now match real constructor-backed SQL flows.
 8. Current validation covers both successful batch-native paths and representative type, shape,
-   scalar-argument, and batch-length failure contracts.
+   scalar-argument, aggregate, and batch-length failure contracts.
 
 ## Constraints In Force
 
@@ -129,7 +144,7 @@ Local implementation round:
    - complex-valued result contracts,
    - callback-driven differentiation / optimization,
    - stateful sparse factorization reuse,
-   - richer planner, UDAF, window, or table-function surfaces.
+   - richer planner, second-wave aggregate, window, or table-function surfaces.
 3. Revisit crates.io publication only once DataFusion exposes a compatible published release line.
 
 ## V1 Publish Readiness

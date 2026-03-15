@@ -10,14 +10,20 @@ use datafusion::common::ScalarValue;
 use datafusion::common::utils::arrays_into_list_array;
 use datafusion::logical_expr::ColumnarValue;
 use ndarray::{Array1, Array2, Array3, Array4, Ix1, Ix2, Ix3, Ix4};
+use num_complex::Complex64;
 
-use crate::metadata::vector_field;
+use crate::metadata::{complex_vector_field, vector_field};
 use crate::udf::common::invoke_udf;
 use crate::udfs;
 
 fn assert_close(actual: f64, expected: f64) {
     let delta = (actual - expected).abs();
     assert!(delta < 1.0e-9, "expected {expected}, got {actual}, delta {delta}");
+}
+
+fn assert_complex_close(actual: Complex64, expected: Complex64) {
+    assert_close(actual.re, expected.re);
+    assert_close(actual.im, expected.im);
 }
 
 fn fixed_size_list<const R: usize, const C: usize>(rows: [[f64; C]; R]) -> FixedSizeListArray {
@@ -32,6 +38,17 @@ fn fixed_size_list_f32<const R: usize, const C: usize>(rows: [[f32; C]; R]) -> F
         rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
         i32::try_from(C).expect("fixed-size-list width should fit i32"),
     )
+}
+
+fn complex_vector_batch<const R: usize, const C: usize>(
+    name: &str,
+    rows: [[Complex64; C]; R],
+) -> (FieldRef, FixedSizeListArray) {
+    let values = rows.into_iter().flatten().collect::<Vec<_>>();
+    let array = Array2::from_shape_vec((R, C), values).expect("complex vector batch shape");
+    let array = ndarrow::array2_complex64_to_fixed_size_list(array).expect("complex vector batch");
+    let field = complex_vector_field(name, C, false).expect("complex vector field");
+    (field, array)
 }
 
 fn matrix_batch<const B: usize, const R: usize, const C: usize>(
@@ -794,6 +811,85 @@ fn vector_udfs_cover_real_batch_ops() {
     assert_close(normalized[[1, 0]], 1.0 / 3.0);
     assert_close(normalized[[1, 1]], 2.0 / 3.0);
     assert_close(normalized[[1, 2]], 2.0 / 3.0);
+}
+
+#[test]
+fn vector_udfs_cover_complex_batch_ops() {
+    let sqrt_two = 2.0_f64.sqrt();
+    let (left_field, left) = complex_vector_batch("left_complex", [
+        [Complex64::new(1.0, 1.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(2.0, 0.0)],
+    ]);
+    let (right_field, right) = complex_vector_batch("right_complex", [
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
+        [Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)],
+    ]);
+    let dot_udf = udfs::vector_dot_hermitian_udf();
+    let norm_udf = udfs::vector_l2_norm_complex_udf();
+    let similarity_udf = udfs::vector_cosine_similarity_complex_udf();
+    let normalize_udf = udfs::vector_normalize_complex_udf();
+
+    let (dot_field, dots) = invoke_udf(
+        &dot_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(left.clone())),
+            ColumnarValue::Array(Arc::new(right.clone())),
+        ],
+        vec![Arc::clone(&left_field), Arc::clone(&right_field)],
+        &[None, None],
+        2,
+    )
+    .expect("vector_dot_hermitian");
+    let dots = ndarrow::complex64_as_array_view1(dot_field.as_ref(), fixed_size_list_array(&dots))
+        .expect("complex scalar output");
+    assert_complex_close(dots[0], Complex64::new(1.0, -1.0));
+    assert_complex_close(dots[1], Complex64::new(0.0, 0.0));
+
+    let (_, norms) = invoke_udf(
+        &norm_udf,
+        vec![ColumnarValue::Array(Arc::new(left.clone()))],
+        vec![Arc::clone(&left_field)],
+        &[None],
+        2,
+    )
+    .expect("vector_l2_norm_complex");
+    assert_close(f64_array(&norms).value(0), sqrt_two);
+    assert_close(f64_array(&norms).value(1), 2.0);
+
+    let (similarity_field, similarities) = invoke_udf(
+        &similarity_udf,
+        vec![ColumnarValue::Array(Arc::new(left.clone())), ColumnarValue::Array(Arc::new(right))],
+        vec![Arc::clone(&left_field), right_field],
+        &[None, None],
+        2,
+    )
+    .expect("vector_cosine_similarity_complex");
+    let similarities = ndarrow::complex64_as_array_view1(
+        similarity_field.as_ref(),
+        fixed_size_list_array(&similarities),
+    )
+    .expect("complex cosine similarity output");
+    assert_complex_close(similarities[0], Complex64::new(0.5, -0.5));
+    assert_complex_close(similarities[1], Complex64::new(0.0, 0.0));
+
+    let (normalized_field, normalized) = invoke_udf(
+        &normalize_udf,
+        vec![ColumnarValue::Array(Arc::new(left))],
+        vec![left_field],
+        &[None],
+        2,
+    )
+    .expect("vector_normalize_complex");
+    let normalized =
+        ndarrow::complex64_as_array_view2(fixed_size_list_array(&normalized)).expect("normalized");
+    let DataType::FixedSizeList(item_field, _) = normalized_field.data_type() else {
+        panic!("expected complex vector field");
+    };
+    assert_eq!(item_field.extension_type_name(), Some("ndarrow.complex64"));
+    assert_complex_close(normalized[[0, 0]], Complex64::new(1.0 / sqrt_two, 1.0 / sqrt_two));
+    assert_complex_close(normalized[[0, 1]], Complex64::new(0.0, 0.0));
+    assert_complex_close(normalized[[1, 0]], Complex64::new(0.0, 0.0));
+    assert_complex_close(normalized[[1, 1]], Complex64::new(1.0, 0.0));
 }
 
 #[test]

@@ -68,6 +68,17 @@
 30. `ndatafusion` remains git-consumed until DataFusion has a published Arrow-58-compatible
     crates.io release. README install guidance, crate docs, and publish checklists must not imply
     crates.io availability while the `datafusion` dependency is still pinned to git.
+31. When SQL functions take data operands followed by control arguments, the preferred call style
+    is positional data operands first and named trailing control arguments after them.
+32. Custom coercion augments the explicit `make_*` constructors; it does not replace the
+    structural constructor boundary for canonical Arrow contracts.
+33. The first admitted aggregate surface is:
+    - `vector_covariance_agg`
+    - `vector_correlation_agg`
+    - `vector_pca_fit`
+    - `linear_regression_fit`
+34. Grouped model fitting and grouped summary statistics should use `AggregateUDF` when they are
+    naturally defined over many row observations rather than one row at a time.
 
 ## Cross-Layer Contract Model
 

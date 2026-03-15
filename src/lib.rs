@@ -1,14 +1,20 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-//! `ndatafusion` provides linear algebra and machine learning UDFs for `DataFusion`.
+//! `ndatafusion` provides linear algebra and machine learning scalar and aggregate UDFs for
+//! `DataFusion`.
 //!
 //! Register the catalog with [`register_all`] and call the functions from SQL or by constructing
 //! expressions with helpers from [`functions`].
 //!
 //! The current catalog supports `Float32` and `Float64` across dense vector, dense matrix, sparse
-//! CSR, fixed-shape tensor, variable-shape tensor, and selected statistics and solver routines.
+//! CSR, fixed-shape tensor, variable-shape tensor, grouped statistics/model fits, and selected
+//! solver routines. The current complex-valued slice covers dense vector operations over canonical
+//! `ndarrow.complex64` vector columns.
+//!
 //! Use the `make_*` constructor family when SQL starts from ordinary `List` values. If a table
 //! already stores canonical `FixedSizeList` or extension-backed Arrow values, call the numerical
-//! UDFs directly.
+//! UDFs directly. Selected constructor, aggregate, and control-parameter UDFs also support named
+//! arguments in SQL. For numerical UDFs, prefer positional data arguments first and named trailing
+//! control arguments after.
 //!
 //! # Quick Start
 //!
@@ -58,11 +64,12 @@
 //! The registered catalog includes:
 //!
 //! - constructors for canonical numerical values
-//! - dense vector operations
+//! - dense vector operations, including the current complex-vector subset
 //! - dense matrix operations, decompositions, and direct solvers
 //! - sparse CSR operations
 //! - fixed-shape and variable-shape tensor operations
 //! - statistics, PCA, iterative solvers, and linear regression
+//! - grouped aggregate fits for covariance, correlation, PCA, and linear regression
 //!
 //! For the complete SQL function inventory and notes on result contracts, see `CATALOG.md` in the
 //! repository root. For small copy-paste query examples, see `EXERCISES.md`.
@@ -86,6 +93,8 @@ pub mod functions;
 pub(crate) mod metadata;
 pub mod register;
 pub(crate) mod signatures;
+pub(crate) mod udaf;
+pub mod udafs;
 pub mod udf;
 pub mod udfs;
 

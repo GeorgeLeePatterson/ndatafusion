@@ -46,8 +46,9 @@ pub use crate::udf::triangular::{
     matrix_solve_upper_udf,
 };
 pub use crate::udf::vector::{
-    vector_cosine_distance_udf, vector_cosine_similarity_udf, vector_dot_udf, vector_l2_norm_udf,
-    vector_normalize_udf,
+    vector_cosine_distance_udf, vector_cosine_similarity_complex_udf, vector_cosine_similarity_udf,
+    vector_dot_hermitian_udf, vector_dot_udf, vector_l2_norm_complex_udf, vector_l2_norm_udf,
+    vector_normalize_complex_udf, vector_normalize_udf,
 };
 
 /// Return all currently implemented `ndatafusion` scalar UDFs.
@@ -64,6 +65,10 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         vector_cosine_similarity_udf(),
         vector_cosine_distance_udf(),
         vector_normalize_udf(),
+        vector_dot_hermitian_udf(),
+        vector_l2_norm_complex_udf(),
+        vector_cosine_similarity_complex_udf(),
+        vector_normalize_complex_udf(),
         matrix_matvec_udf(),
         matrix_matmul_udf(),
         matrix_lu_udf(),
@@ -138,21 +143,155 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        all_default_functions, make_variable_tensor_udf, matrix_qr_solve_least_squares_udf,
-        tensor_l2_norm_last_axis_udf, tensor_variable_sum_last_axis_udf, vector_l2_norm_udf,
+        all_default_functions, linear_regression_udf, make_csr_matrix_batch_udf, make_matrix_udf,
+        make_variable_tensor_udf, make_vector_udf, matrix_cholesky_solve_udf,
+        matrix_conjugate_gradient_udf, matrix_exp_udf, matrix_gmres_udf, matrix_log_taylor_udf,
+        matrix_lu_solve_udf, matrix_matmul_udf, matrix_matvec_udf, matrix_power_udf,
+        matrix_qr_solve_least_squares_udf, matrix_solve_lower_matrix_udf, matrix_solve_lower_udf,
+        matrix_solve_upper_matrix_udf, matrix_solve_upper_udf, matrix_svd_truncated_udf,
+        matrix_svd_with_tolerance_udf, sparse_lu_solve_udf, sparse_matmat_dense_udf,
+        sparse_matmat_sparse_udf, sparse_matvec_udf, sparse_transpose_udf,
+        tensor_batched_dot_last_axis_udf, tensor_batched_matmul_last_two_udf,
+        tensor_contract_axes_udf, tensor_l2_norm_last_axis_udf, tensor_normalize_last_axis_udf,
+        tensor_permute_axes_udf, tensor_sum_last_axis_udf,
+        tensor_variable_batched_dot_last_axis_udf, tensor_variable_l2_norm_last_axis_udf,
+        tensor_variable_normalize_last_axis_udf, tensor_variable_sum_last_axis_udf,
+        vector_cosine_distance_udf, vector_cosine_similarity_complex_udf,
+        vector_cosine_similarity_udf, vector_dot_hermitian_udf, vector_dot_udf,
+        vector_l2_norm_complex_udf, vector_l2_norm_udf, vector_normalize_complex_udf,
+        vector_normalize_udf,
     };
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
-        assert_eq!(all_default_functions().len(), 78);
+        assert_eq!(all_default_functions().len(), 82);
     }
 
     #[test]
     fn representative_udfs_expose_expected_aliases() {
         assert_eq!(vector_l2_norm_udf().aliases(), ["vector_norm"]);
+        assert_eq!(vector_l2_norm_complex_udf().aliases(), ["vector_norm_complex"]);
         assert_eq!(make_variable_tensor_udf().aliases(), ["make_var_tensor"]);
         assert_eq!(tensor_l2_norm_last_axis_udf().aliases(), ["tensor_norm_last"]);
         assert_eq!(tensor_variable_sum_last_axis_udf().aliases(), ["tensor_var_sum_last"]);
         assert_eq!(matrix_qr_solve_least_squares_udf().aliases(), ["matrix_qr_solve_ls"],);
+    }
+
+    #[test]
+    fn representative_udfs_expose_expected_parameter_names() {
+        assert_eq!(
+            make_matrix_udf().signature().parameter_names.as_deref(),
+            Some(["values".to_string(), "rows".to_string(), "cols".to_string()].as_slice())
+        );
+        assert_eq!(
+            make_csr_matrix_batch_udf().signature().parameter_names.as_deref(),
+            Some(
+                [
+                    "shape".to_string(),
+                    "row_ptrs".to_string(),
+                    "col_indices".to_string(),
+                    "values".to_string(),
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            matrix_exp_udf().signature().parameter_names.as_deref(),
+            Some(
+                ["matrix".to_string(), "max_terms".to_string(), "tolerance".to_string()].as_slice()
+            )
+        );
+        assert_eq!(
+            matrix_conjugate_gradient_udf().signature().parameter_names.as_deref(),
+            Some(
+                [
+                    "matrix".to_string(),
+                    "rhs".to_string(),
+                    "tolerance".to_string(),
+                    "max_iterations".to_string(),
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            matrix_gmres_udf().signature().parameter_names.as_deref(),
+            Some(
+                [
+                    "matrix".to_string(),
+                    "rhs".to_string(),
+                    "tolerance".to_string(),
+                    "max_iterations".to_string(),
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            matrix_svd_truncated_udf().signature().parameter_names.as_deref(),
+            Some(["matrix".to_string(), "k".to_string()].as_slice())
+        );
+        assert_eq!(
+            matrix_svd_with_tolerance_udf().signature().parameter_names.as_deref(),
+            Some(["matrix".to_string(), "tolerance".to_string()].as_slice())
+        );
+        assert_eq!(
+            linear_regression_udf().signature().parameter_names.as_deref(),
+            Some(
+                ["design".to_string(), "response".to_string(), "add_intercept".to_string(),]
+                    .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn documented_udfs_expose_documentation() {
+        for udf in [
+            make_vector_udf(),
+            make_matrix_udf(),
+            make_variable_tensor_udf(),
+            make_csr_matrix_batch_udf(),
+            vector_l2_norm_udf(),
+            vector_dot_udf(),
+            vector_cosine_similarity_udf(),
+            vector_cosine_distance_udf(),
+            vector_normalize_udf(),
+            vector_dot_hermitian_udf(),
+            vector_l2_norm_complex_udf(),
+            vector_cosine_similarity_complex_udf(),
+            vector_normalize_complex_udf(),
+            matrix_matmul_udf(),
+            matrix_matvec_udf(),
+            matrix_lu_solve_udf(),
+            matrix_cholesky_solve_udf(),
+            matrix_exp_udf(),
+            matrix_log_taylor_udf(),
+            matrix_power_udf(),
+            matrix_conjugate_gradient_udf(),
+            matrix_gmres_udf(),
+            matrix_solve_lower_udf(),
+            matrix_solve_upper_udf(),
+            matrix_solve_lower_matrix_udf(),
+            matrix_solve_upper_matrix_udf(),
+            sparse_matvec_udf(),
+            sparse_matmat_dense_udf(),
+            sparse_transpose_udf(),
+            sparse_matmat_sparse_udf(),
+            sparse_lu_solve_udf(),
+            tensor_sum_last_axis_udf(),
+            tensor_l2_norm_last_axis_udf(),
+            tensor_normalize_last_axis_udf(),
+            tensor_batched_dot_last_axis_udf(),
+            tensor_batched_matmul_last_two_udf(),
+            tensor_permute_axes_udf(),
+            tensor_contract_axes_udf(),
+            tensor_variable_sum_last_axis_udf(),
+            tensor_variable_l2_norm_last_axis_udf(),
+            tensor_variable_normalize_last_axis_udf(),
+            tensor_variable_batched_dot_last_axis_udf(),
+            matrix_svd_truncated_udf(),
+            matrix_svd_with_tolerance_udf(),
+            linear_regression_udf(),
+        ] {
+            assert!(udf.documentation().is_some(), "missing docs for {}", udf.name());
+        }
     }
 }

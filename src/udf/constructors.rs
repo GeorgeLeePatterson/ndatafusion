@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::array::{
@@ -10,17 +10,22 @@ use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use ndarray::{Array2, ArrayD, IxDyn};
 use ndarrow::{IntoArrow, NdarrowElement};
 
 use super::common::nullable_or;
+use super::docs::constructor_doc;
 use crate::error::{exec_error, plan_error, scalar_argument_required, type_mismatch};
 use crate::metadata::{
     csr_matrix_batch_field, fixed_shape_tensor_field, variable_shape_tensor_field, vector_field,
 };
-use crate::signatures::any_signature;
+use crate::signatures::{
+    ScalarCoercion, coerce_scalar_arguments, coerce_trailing_scalar_arguments, named_any_signature,
+    named_user_defined_signature, user_defined_signature,
+};
 
 fn scalar_usize(value: &ScalarValue, function_name: &str, position: usize) -> Result<usize> {
     match value {
@@ -622,7 +627,7 @@ struct MakeVector {
 }
 
 impl MakeVector {
-    fn new() -> Self { Self { signature: any_signature(2) } }
+    fn new() -> Self { Self { signature: named_user_defined_signature(&["values", "dimension"]) } }
 }
 
 impl ScalarUDFImpl for MakeVector {
@@ -631,6 +636,10 @@ impl ScalarUDFImpl for MakeVector {
     fn name(&self) -> &'static str { "make_vector" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[(2, ScalarCoercion::Integer)])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -695,6 +704,24 @@ impl ScalarUDFImpl for MakeVector {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            constructor_doc(
+                "Build a canonical dense vector batch from SQL list values and an explicit vector \
+                 dimension.",
+                "make_vector(values => value_list, dimension => 3)",
+            )
+            .with_argument(
+                "values",
+                "List<Float32|Float64> rows containing one dense vector per row.",
+            )
+            .with_argument("dimension", "Positive integer vector width for each row.")
+            .with_alternative_syntax("make_vector(value_list, 3)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -703,7 +730,9 @@ struct MakeMatrix {
 }
 
 impl MakeMatrix {
-    fn new() -> Self { Self { signature: any_signature(3) } }
+    fn new() -> Self {
+        Self { signature: named_user_defined_signature(&["values", "rows", "cols"]) }
+    }
 }
 
 impl ScalarUDFImpl for MakeMatrix {
@@ -712,6 +741,13 @@ impl ScalarUDFImpl for MakeMatrix {
     fn name(&self) -> &'static str { "make_matrix" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[
+            (2, ScalarCoercion::Integer),
+            (3, ScalarCoercion::Integer),
+        ])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -803,6 +839,25 @@ impl ScalarUDFImpl for MakeMatrix {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            constructor_doc(
+                "Build a canonical dense matrix batch from flat row-major lists or nested row \
+                 lists.",
+                "make_matrix(values => matrix_values, rows => 2, cols => 2)",
+            )
+            .with_argument(
+                "values",
+                "List<Float32|Float64> row-major rows or List<List<Float32|Float64>> nested rows.",
+            )
+            .with_argument("rows", "Positive integer row count for each matrix.")
+            .with_argument("cols", "Positive integer column count for each matrix.")
+            .with_alternative_syntax("make_matrix(matrix_values, 2, 2)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -811,9 +866,7 @@ struct MakeTensor {
 }
 
 impl MakeTensor {
-    fn new() -> Self {
-        Self { signature: Signature::variadic_any(datafusion::logical_expr::Volatility::Immutable) }
-    }
+    fn new() -> Self { Self { signature: user_defined_signature() } }
 }
 
 impl ScalarUDFImpl for MakeTensor {
@@ -822,6 +875,10 @@ impl ScalarUDFImpl for MakeTensor {
     fn name(&self) -> &'static str { "make_tensor" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_trailing_scalar_arguments(self.name(), arg_types, 2, ScalarCoercion::Integer)
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -903,7 +960,9 @@ struct MakeVariableTensor {
 }
 
 impl MakeVariableTensor {
-    fn new() -> Self { Self { signature: any_signature(3) } }
+    fn new() -> Self {
+        Self { signature: named_user_defined_signature(&["data", "shapes", "rank"]) }
+    }
 }
 
 impl ScalarUDFImpl for MakeVariableTensor {
@@ -912,6 +971,10 @@ impl ScalarUDFImpl for MakeVariableTensor {
     fn name(&self) -> &'static str { "make_variable_tensor" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[(3, ScalarCoercion::Integer)])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -964,6 +1027,22 @@ impl ScalarUDFImpl for MakeVariableTensor {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            constructor_doc(
+                "Build a canonical variable-shape tensor batch from per-row flattened values and \
+                 explicit per-row shapes.",
+                "make_variable_tensor(data => tensor_values, shapes => tensor_shapes, rank => 3)",
+            )
+            .with_argument("data", "List<Float32|Float64> rows containing flattened tensor values.")
+            .with_argument("shapes", "List<Int32> rows containing one shape vector per tensor row.")
+            .with_argument("rank", "Positive integer tensor rank shared by each row shape.")
+            .with_alternative_syntax("make_variable_tensor(tensor_values, tensor_shapes, 3)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -972,7 +1051,9 @@ struct MakeCsrMatrixBatch {
 }
 
 impl MakeCsrMatrixBatch {
-    fn new() -> Self { Self { signature: any_signature(4) } }
+    fn new() -> Self {
+        Self { signature: named_any_signature(4, &["shape", "row_ptrs", "col_indices", "values"]) }
+    }
 }
 
 impl ScalarUDFImpl for MakeCsrMatrixBatch {
@@ -1041,6 +1122,24 @@ impl ScalarUDFImpl for MakeCsrMatrixBatch {
                 Err(exec_error(self.name(), format!("unsupported constructor value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            constructor_doc(
+                "Build a canonical CSR sparse-matrix batch from batched shape, row pointer, \
+                 column index, and value lists.",
+                "make_csr_matrix_batch(shape => shapes, row_ptrs => row_ptrs, col_indices => \
+                 col_indices, values => values)",
+            )
+            .with_argument("shape", "List<Int32> rows containing `[rows, cols]` per sparse matrix.")
+            .with_argument("row_ptrs", "List<Int32> rows containing CSR row pointers.")
+            .with_argument("col_indices", "List<UInt32> rows containing CSR column indices.")
+            .with_argument("values", "List<Float32|Float64> rows containing CSR non-zero values.")
+            .with_alternative_syntax("make_csr_matrix_batch(shapes, row_ptrs, col_indices, values)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 

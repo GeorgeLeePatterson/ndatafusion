@@ -1,16 +1,18 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::array::types::{Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use ndarray::Ix1;
 
 use super::common::{expect_struct_arg, map_arrow_error, nullable_or};
+use super::docs::sparse_doc;
 use crate::error::{exec_error, plan_error};
 use crate::metadata::{
     field_like, parse_csr_matrix_batch_field, parse_variable_shape_tensor_field,
@@ -97,6 +99,26 @@ impl ScalarUDFImpl for SparseMatvec {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            sparse_doc(
+                "Multiply each CSR sparse matrix in the batch by a dense vector in the matching \
+                 row.",
+                "sparse_matvec(sparse_batch, vector_batch)",
+            )
+            .with_argument(
+                "sparse_batch",
+                "Canonical ndarrow.csr_matrix_batch column containing one sparse matrix per row.",
+            )
+            .with_argument(
+                "vector_batch",
+                "Canonical variable-shape tensor batch containing rank-1 dense vectors.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -181,6 +203,26 @@ impl ScalarUDFImpl for SparseMatmatDense {
         }
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            sparse_doc(
+                "Multiply each CSR sparse matrix in the batch by a dense matrix in the matching \
+                 row.",
+                "sparse_matmat_dense(sparse_batch, dense_batch)",
+            )
+            .with_argument(
+                "sparse_batch",
+                "Canonical ndarrow.csr_matrix_batch column containing one sparse matrix per row.",
+            )
+            .with_argument(
+                "dense_batch",
+                "Canonical variable-shape tensor batch containing rank-2 dense matrices.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -317,6 +359,21 @@ impl ScalarUDFImpl for SparseTranspose {
             .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            sparse_doc(
+                "Transpose each CSR sparse matrix in the batch.",
+                "sparse_transpose(sparse_batch)",
+            )
+            .with_argument(
+                "sparse_batch",
+                "Canonical ndarrow.csr_matrix_batch column containing one sparse matrix per row.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -389,6 +446,27 @@ impl ScalarUDFImpl for SparseMatmatSparse {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            sparse_doc(
+                "Multiply paired CSR sparse matrices row by row.",
+                "sparse_matmat_sparse(left_batch, right_batch)",
+            )
+            .with_argument(
+                "left_batch",
+                "Left canonical ndarrow.csr_matrix_batch column containing one sparse matrix per \
+                 row.",
+            )
+            .with_argument(
+                "right_batch",
+                "Right canonical ndarrow.csr_matrix_batch column containing one sparse matrix per \
+                 row.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -445,6 +523,26 @@ impl ScalarUDFImpl for SparseLuSolve {
                 format!("unsupported sparse matrix value type {actual}"),
             )),
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            sparse_doc(
+                "Solve each square CSR sparse system in the batch with a dense vector right-hand \
+                 side.",
+                "sparse_lu_solve(sparse_batch, vector_batch)",
+            )
+            .with_argument(
+                "sparse_batch",
+                "Canonical ndarrow.csr_matrix_batch column containing one sparse matrix per row.",
+            )
+            .with_argument(
+                "vector_batch",
+                "Canonical variable-shape tensor batch containing rank-1 dense vectors.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 

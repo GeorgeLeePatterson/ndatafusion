@@ -1,6 +1,6 @@
 # Execution Tracker
 
-Last updated: 2026-03-14
+Last updated: 2026-03-15
 
 ## Purpose
 
@@ -34,6 +34,9 @@ codebase.
    catalog.
 9. Publish hardening is now in place for the current git-consumed release posture, and the
    non-controversial real-valued catalog is now complete on the current constructor-backed surface.
+10. Post-v1 expansion work has now started on the current git-consumed tree via complex-vector
+    scalar UDFs, custom coercion, programmatic UDF documentation, and the first aggregate UDF
+    wave.
 
 ## V1 Publish Gate (Ordered, Required)
 
@@ -210,21 +213,35 @@ order:
     - line coverage remains above the repository gate
     - remaining work is now intentionally controversial, post-v1, or blocked on upstream
       DataFusion publication
+27. `D-027`: The first post-v1 upgrade wave is now in place:
+    - shared signatures now support custom scalar coercion for constructor dimensions, scalar
+      controls, and aggregate regression fit arguments
+    - programmatic `documentation()` now covers constructors, the main scalar operational surface,
+      and the first aggregate wave
+    - the scalar catalog now includes the first complex-vector SQL slice:
+      `vector_dot_hermitian`, `vector_l2_norm_complex`,
+      `vector_cosine_similarity_complex`, and `vector_normalize_complex`
+    - the public registration surface now also includes the first aggregate UDF wave:
+      `vector_covariance_agg`, `vector_correlation_agg`, `vector_pca_fit`,
+      and `linear_regression_fit`
+    - the current registered catalog now exposes 82 scalar UDFs plus 4 aggregate UDFs
+    - SQL integration coverage now exercises grouped aggregate queries for covariance,
+      correlation, PCA fit, and linear regression fit
 
 ## Next
 
-1. `N-011` (`Layer 3`, `ndatafusion`): Plan the controversial or post-v1 surface explicitly:
-   - complex-valued result contracts,
+1. `N-011` (`Layer 3`, `ndatafusion`): Plan and implement the next post-v1 surface explicitly:
+   - complex-valued matrix and tensor result contracts,
    - callback-driven differentiation / optimization,
    - stateful sparse factorization reuse,
-   - richer planner, UDAF, window, or table-function surfaces.
+   - second-wave aggregate, window, table-function, and planner surfaces.
 
 ## Needed
 
 1. Replace the temporary DataFusion git dependency once a published Arrow-58-compatible release
    exists on crates.io.
 2. Decide which controversial or post-v1 capabilities are actually worth admitting after the
-   current real-valued release checkpoint.
+   current aggregate-enabled release checkpoint.
 3. A post-v1 performance pass to reduce fallback lift/assembly overhead where direct batch
    delegation is still impossible.
 

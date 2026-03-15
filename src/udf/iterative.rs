@@ -1,11 +1,12 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use nabled::core::prelude::NabledReal;
 use ndarray::{Array1, ArrayView1, ArrayView2, Axis};
@@ -16,9 +17,10 @@ use super::common::{
     expect_usize_scalar_arg, expect_usize_scalar_argument, fixed_shape_tensor_view3,
     fixed_size_list_array_from_flat_rows, fixed_size_list_view2, nullable_or,
 };
+use super::docs::iterative_doc;
 use crate::error::exec_error;
 use crate::metadata::{parse_matrix_batch_field, parse_vector_field, vector_field};
-use crate::signatures::any_signature;
+use crate::signatures::{ScalarCoercion, coerce_scalar_arguments, named_user_defined_signature};
 
 fn return_square_system(
     args: &ReturnFieldArgs<'_>,
@@ -166,7 +168,16 @@ struct MatrixConjugateGradient {
 }
 
 impl MatrixConjugateGradient {
-    fn new() -> Self { Self { signature: any_signature(4) } }
+    fn new() -> Self {
+        Self {
+            signature: named_user_defined_signature(&[
+                "matrix",
+                "rhs",
+                "tolerance",
+                "max_iterations",
+            ]),
+        }
+    }
 }
 
 impl ScalarUDFImpl for MatrixConjugateGradient {
@@ -176,6 +187,13 @@ impl ScalarUDFImpl for MatrixConjugateGradient {
 
     fn signature(&self) -> &Signature { &self.signature }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[
+            (3, ScalarCoercion::Real),
+            (4, ScalarCoercion::Integer),
+        ])
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
     }
@@ -246,6 +264,32 @@ impl ScalarUDFImpl for MatrixConjugateGradient {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            iterative_doc(
+                "Solve each square linear system in the batch with conjugate gradient.",
+                "matrix_conjugate_gradient(matrix_batch, rhs_batch, tolerance => 1e-6, \
+                 max_iterations => 64)",
+            )
+            .with_argument(
+                "matrix",
+                "Square dense matrix batch in canonical fixed-shape tensor form.",
+            )
+            .with_argument(
+                "rhs",
+                "Dense vector batch containing one right-hand side per matrix row.",
+            )
+            .with_argument("tolerance", "Positive finite convergence tolerance.")
+            .with_argument("max_iterations", "Positive integer iteration cap.")
+            .with_alternative_syntax(
+                "matrix_conjugate_gradient(matrix => matrix_batch, rhs => rhs_batch, tolerance => \
+                 1e-6, max_iterations => 64)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -255,7 +299,16 @@ struct MatrixGmres {
 }
 
 impl MatrixGmres {
-    fn new() -> Self { Self { signature: any_signature(4) } }
+    fn new() -> Self {
+        Self {
+            signature: named_user_defined_signature(&[
+                "matrix",
+                "rhs",
+                "tolerance",
+                "max_iterations",
+            ]),
+        }
+    }
 }
 
 impl ScalarUDFImpl for MatrixGmres {
@@ -264,6 +317,13 @@ impl ScalarUDFImpl for MatrixGmres {
     fn name(&self) -> &'static str { "matrix_gmres" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[
+            (3, ScalarCoercion::Real),
+            (4, ScalarCoercion::Integer),
+        ])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -335,6 +395,31 @@ impl ScalarUDFImpl for MatrixGmres {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            iterative_doc(
+                "Solve each square linear system in the batch with GMRES.",
+                "matrix_gmres(matrix_batch, rhs_batch, tolerance => 1e-6, max_iterations => 64)",
+            )
+            .with_argument(
+                "matrix",
+                "Square dense matrix batch in canonical fixed-shape tensor form.",
+            )
+            .with_argument(
+                "rhs",
+                "Dense vector batch containing one right-hand side per matrix row.",
+            )
+            .with_argument("tolerance", "Positive finite convergence tolerance.")
+            .with_argument("max_iterations", "Positive integer iteration cap.")
+            .with_alternative_syntax(
+                "matrix_gmres(matrix => matrix_batch, rhs => rhs_batch, tolerance => 1e-6, \
+                 max_iterations => 64)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 

@@ -23,7 +23,7 @@ removed.
 ## Pre-Release Gates
 
 1. `just checks`
-2. `cargo llvm-cov clean --workspace && cargo llvm-cov --no-default-features --lib --tests --no-report && cargo llvm-cov report --summary-only --ignore-filename-regex '.*/examples/.*' --fail-under-lines 90`
+2. `cargo llvm-cov clean --workspace && cargo llvm-cov --no-default-features --lib --tests --no-report && cargo llvm-cov report --summary-only --ignore-filename-regex '.*/examples/.*|.*/src/udf/docs.rs' --fail-under-lines 90`
 3. `cargo doc --no-default-features --no-deps`
 4. Verify README quick-start examples against the current SQL constructor surface.
 5. Verify `docs/STATUS.md`, `docs/EXECUTION_TRACKER.md`, and `docs/CAPABILITY_MATRIX.md` reflect

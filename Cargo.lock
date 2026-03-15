@@ -2533,6 +2533,7 @@ dependencies = [
  "ndarray",
  "ndarray-linalg",
  "ndarrow",
+ "num-complex",
  "serde",
  "serde_json",
  "tokio",

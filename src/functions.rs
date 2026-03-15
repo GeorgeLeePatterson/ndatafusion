@@ -1,14 +1,14 @@
-//! Expression builders for the `ndatafusion` UDF catalog.
+//! Expression builders for the `ndatafusion` scalar and aggregate UDF catalog.
 //!
 //! Each function in this module returns a `datafusion::logical_expr::Expr` that calls a registered
-//! `ndatafusion` scalar UDF. The helper names match the SQL function names.
+//! `ndatafusion` scalar or aggregate UDF. The helper names match the SQL function names.
 //!
 //! For the complete catalog and notes on input and output contracts, see `CATALOG.md` in the
 //! repository root.
 
 use datafusion::logical_expr::Expr;
 
-use crate::udfs;
+use crate::{udafs, udfs};
 
 #[must_use]
 pub fn make_vector(values: Expr, dim: Expr) -> Expr {
@@ -58,6 +58,26 @@ pub fn vector_cosine_distance(left: Expr, right: Expr) -> Expr {
 
 #[must_use]
 pub fn vector_normalize(vector: Expr) -> Expr { udfs::vector_normalize_udf().call(vec![vector]) }
+
+#[must_use]
+pub fn vector_dot_hermitian(left: Expr, right: Expr) -> Expr {
+    udfs::vector_dot_hermitian_udf().call(vec![left, right])
+}
+
+#[must_use]
+pub fn vector_l2_norm_complex(vector: Expr) -> Expr {
+    udfs::vector_l2_norm_complex_udf().call(vec![vector])
+}
+
+#[must_use]
+pub fn vector_cosine_similarity_complex(left: Expr, right: Expr) -> Expr {
+    udfs::vector_cosine_similarity_complex_udf().call(vec![left, right])
+}
+
+#[must_use]
+pub fn vector_normalize_complex(vector: Expr) -> Expr {
+    udfs::vector_normalize_complex_udf().call(vec![vector])
+}
 
 #[must_use]
 pub fn matrix_matvec(matrix: Expr, vector: Expr) -> Expr {
@@ -379,15 +399,33 @@ pub fn linear_regression(design: Expr, response: Expr, add_intercept: Expr) -> E
     udfs::linear_regression_udf().call(vec![design, response, add_intercept])
 }
 
+#[must_use]
+pub fn vector_covariance_agg(vectors: Expr) -> Expr {
+    udafs::vector_covariance_agg_udaf().call(vec![vectors])
+}
+
+#[must_use]
+pub fn vector_correlation_agg(vectors: Expr) -> Expr {
+    udafs::vector_correlation_agg_udaf().call(vec![vectors])
+}
+
+#[must_use]
+pub fn vector_pca_fit(vectors: Expr) -> Expr { udafs::vector_pca_fit_udaf().call(vec![vectors]) }
+
+#[must_use]
+pub fn linear_regression_fit(design: Expr, response: Expr, add_intercept: Expr) -> Expr {
+    udafs::linear_regression_fit_udaf().call(vec![design, response, add_intercept])
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::common::ScalarValue;
     use datafusion::logical_expr::Expr;
 
     use super::{
-        linear_regression, make_csr_matrix_batch, make_matrix, make_tensor, make_variable_tensor,
-        make_vector, matrix_balance_nonsymmetric, matrix_center_columns, matrix_cholesky,
-        matrix_cholesky_inverse, matrix_cholesky_solve, matrix_column_means,
+        linear_regression, linear_regression_fit, make_csr_matrix_batch, make_matrix, make_tensor,
+        make_variable_tensor, make_vector, matrix_balance_nonsymmetric, matrix_center_columns,
+        matrix_cholesky, matrix_cholesky_inverse, matrix_cholesky_solve, matrix_column_means,
         matrix_conjugate_gradient, matrix_correlation, matrix_covariance, matrix_determinant,
         matrix_eigen_generalized, matrix_eigen_symmetric, matrix_exp, matrix_exp_eigen,
         matrix_gmres, matrix_gram_schmidt, matrix_gram_schmidt_classic, matrix_inverse,
@@ -403,8 +441,10 @@ mod tests {
         tensor_batched_matmul_last_two, tensor_contract_axes, tensor_l2_norm_last_axis,
         tensor_normalize_last_axis, tensor_permute_axes, tensor_sum_last_axis,
         tensor_variable_batched_dot_last_axis, tensor_variable_l2_norm_last_axis,
-        tensor_variable_normalize_last_axis, tensor_variable_sum_last_axis, vector_cosine_distance,
-        vector_cosine_similarity, vector_dot, vector_l2_norm, vector_normalize,
+        tensor_variable_normalize_last_axis, tensor_variable_sum_last_axis, vector_correlation_agg,
+        vector_cosine_distance, vector_cosine_similarity, vector_cosine_similarity_complex,
+        vector_covariance_agg, vector_dot, vector_dot_hermitian, vector_l2_norm,
+        vector_l2_norm_complex, vector_normalize, vector_normalize_complex, vector_pca_fit,
     };
 
     fn literal_i64(value: i64) -> Expr { Expr::Literal(ScalarValue::Int64(Some(value)), None) }
@@ -415,6 +455,14 @@ mod tests {
         };
         assert_eq!(function.name(), expected_name);
         assert_eq!(function.args.len(), expected_args);
+    }
+
+    fn assert_aggregate_function(expr: Expr, expected_name: &str, expected_args: usize) {
+        let Expr::AggregateFunction(function) = expr else {
+            panic!("expected aggregate function expression");
+        };
+        assert_eq!(function.func.name(), expected_name);
+        assert_eq!(function.params.args.len(), expected_args);
     }
 
     #[test]
@@ -465,6 +513,22 @@ mod tests {
             2,
         );
         assert_scalar_function(vector_normalize(one.clone()), "vector_normalize", 1);
+        assert_scalar_function(
+            vector_dot_hermitian(one.clone(), two.clone()),
+            "vector_dot_hermitian",
+            2,
+        );
+        assert_scalar_function(vector_l2_norm_complex(one.clone()), "vector_l2_norm_complex", 1);
+        assert_scalar_function(
+            vector_cosine_similarity_complex(one.clone(), two.clone()),
+            "vector_cosine_similarity_complex",
+            2,
+        );
+        assert_scalar_function(
+            vector_normalize_complex(one.clone()),
+            "vector_normalize_complex",
+            1,
+        );
         assert_scalar_function(matrix_matvec(one.clone(), two.clone()), "matrix_matvec", 2);
         assert_scalar_function(matrix_matmul(one.clone(), two.clone()), "matrix_matmul", 2);
         assert_scalar_function(
@@ -486,6 +550,22 @@ mod tests {
             matrix_solve_upper_matrix(one.clone(), two.clone()),
             "matrix_solve_upper_matrix",
             2,
+        );
+    }
+
+    #[test]
+    fn aggregate_helpers_wrap_the_expected_udafs() {
+        let one = literal_i64(1);
+        let two = literal_i64(2);
+        let three = literal_i64(3);
+
+        assert_aggregate_function(vector_covariance_agg(one.clone()), "vector_covariance_agg", 1);
+        assert_aggregate_function(vector_correlation_agg(one.clone()), "vector_correlation_agg", 1);
+        assert_aggregate_function(vector_pca_fit(one.clone()), "vector_pca_fit", 1);
+        assert_aggregate_function(
+            linear_regression_fit(one, two, three),
+            "linear_regression_fit",
+            3,
         );
     }
 

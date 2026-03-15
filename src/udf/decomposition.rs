@@ -1,12 +1,13 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::array::{ArrayRef, Int8Array, Int64Array, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use nabled::core::prelude::NabledReal;
 use ndarray::{Array2, Array3, Axis};
@@ -18,12 +19,15 @@ use super::common::{
     fixed_size_list_array_from_flat_rows, fixed_size_list_view2, nullable_or,
     primitive_array_from_values,
 };
+use super::docs::decomposition_doc;
 use crate::error::exec_error;
 use crate::metadata::{
     fixed_shape_tensor_field, parse_matrix_batch_field, parse_vector_field, scalar_field,
     struct_field, variable_shape_tensor_field, vector_field,
 };
-use crate::signatures::any_signature;
+use crate::signatures::{
+    ScalarCoercion, any_signature, coerce_scalar_arguments, named_user_defined_signature,
+};
 
 fn square_matrix_shape(
     args: &ReturnFieldArgs<'_>,
@@ -1323,7 +1327,7 @@ struct MatrixSvdTruncated {
 }
 
 impl MatrixSvdTruncated {
-    fn new() -> Self { Self { signature: any_signature(2) } }
+    fn new() -> Self { Self { signature: named_user_defined_signature(&["matrix", "k"]) } }
 }
 
 impl ScalarUDFImpl for MatrixSvdTruncated {
@@ -1332,6 +1336,10 @@ impl ScalarUDFImpl for MatrixSvdTruncated {
     fn name(&self) -> &'static str { "matrix_svd_truncated" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[(2, ScalarCoercion::Integer)])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -1385,6 +1393,20 @@ impl ScalarUDFImpl for MatrixSvdTruncated {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            decomposition_doc(
+                "Compute a truncated singular value decomposition for each matrix in the batch.",
+                "matrix_svd_truncated(matrix_batch, k => 8)",
+            )
+            .with_argument("matrix", "Dense matrix batch in canonical fixed-shape tensor form.")
+            .with_argument("k", "Positive integer target rank for the truncated decomposition.")
+            .with_alternative_syntax("matrix_svd_truncated(matrix => matrix_batch, k => 8)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1393,7 +1415,7 @@ struct MatrixSvdWithTolerance {
 }
 
 impl MatrixSvdWithTolerance {
-    fn new() -> Self { Self { signature: any_signature(2) } }
+    fn new() -> Self { Self { signature: named_user_defined_signature(&["matrix", "tolerance"]) } }
 }
 
 impl ScalarUDFImpl for MatrixSvdWithTolerance {
@@ -1402,6 +1424,10 @@ impl ScalarUDFImpl for MatrixSvdWithTolerance {
     fn name(&self) -> &'static str { "matrix_svd_with_tolerance" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[(2, ScalarCoercion::Real)])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -1460,6 +1486,23 @@ impl ScalarUDFImpl for MatrixSvdWithTolerance {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            decomposition_doc(
+                "Compute a tolerance-thresholded singular value decomposition for each matrix in \
+                 the batch.",
+                "matrix_svd_with_tolerance(matrix_batch, tolerance => 1e-6)",
+            )
+            .with_argument("matrix", "Dense matrix batch in canonical fixed-shape tensor form.")
+            .with_argument("tolerance", "Finite non-negative singular-value threshold.")
+            .with_alternative_syntax(
+                "matrix_svd_with_tolerance(matrix => matrix_batch, tolerance => 1e-6)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 

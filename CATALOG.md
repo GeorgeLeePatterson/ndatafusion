@@ -34,6 +34,36 @@ Examples:
 - `tensor_var_sum_last` aliases `tensor_variable_sum_last_axis`
 - `matrix_qr_solve_ls` aliases `matrix_qr_solve_least_squares`
 
+## Named Argument Support
+
+`ndatafusion` also supports named SQL arguments on selected fixed-arity constructors and
+control-parameter UDFs where argument order is easy to confuse. Current named-argument coverage
+includes:
+
+- `make_vector`
+- `make_matrix`
+- `make_variable_tensor`
+- `make_csr_matrix_batch`
+- `matrix_exp`
+- `matrix_log_taylor`
+- `matrix_power`
+- `matrix_conjugate_gradient`
+- `matrix_gmres`
+- `matrix_svd_truncated`
+- `matrix_svd_with_tolerance`
+- `linear_regression`
+ - `linear_regression_fit`
+
+For numerical UDFs with data operands followed by control scalars, prefer positional data
+arguments first and named trailing controls after. For example:
+
+- `matrix_exp(matrix_batch, max_terms => 32, tolerance => 1e-6)`
+- `matrix_svd_truncated(matrix_batch, k => 8)`
+- `matrix_conjugate_gradient(matrix_batch, rhs_batch, tolerance => 1e-6, max_iterations => 64)`
+
+Constructors remain a good fit for fully named calls because their arguments are structural and
+order-sensitive.
+
 ## Constructors
 
 | UDF | Status | Notes |
@@ -53,6 +83,15 @@ Examples:
 | `vector_cosine_similarity` | Implemented | Row-wise cosine similarity. |
 | `vector_cosine_distance` | Implemented | Row-wise cosine distance. |
 | `vector_normalize` | Implemented | Row-wise normalization. |
+
+## Complex Vectors
+
+| UDF | Status | Notes |
+|---|---|---|
+| `vector_dot_hermitian` | Implemented | Row-wise Hermitian dot product over canonical `FixedSizeList<ndarrow.complex64>(D)` batches. |
+| `vector_l2_norm_complex` | Implemented | Row-wise complex L2 norm with real-valued output. |
+| `vector_cosine_similarity_complex` | Implemented | Row-wise complex cosine similarity with complex-valued output. |
+| `vector_normalize_complex` | Implemented | Row-wise complex vector normalization. |
 
 ## Dense Matrix Ops And Direct Solvers
 
@@ -147,15 +186,19 @@ Examples:
 | `matrix_gmres` | Implemented | Dense GMRES solve with explicit `tolerance` and `max_iterations`. |
 | `linear_regression` | Implemented | Returns a struct containing `coefficients`, `fitted_values`, `residuals`, and `r_squared`. |
 
+## Aggregate UDFs
+
+| UDF | Status | Notes |
+|---|---|---|
+| `vector_covariance_agg` | Implemented | Grouped covariance matrix over canonical dense vector rows. |
+| `vector_correlation_agg` | Implemented | Grouped correlation matrix over canonical dense vector rows. |
+| `vector_pca_fit` | Implemented | Grouped PCA fit returning `components`, explained-variance fields, and `mean`. |
+| `linear_regression_fit` | Implemented | Grouped linear-regression fit returning `coefficients` and `r_squared`. |
+
 ## Roadmap Items
 
 | Method Or Surface | `nabled` | `ndatafusion` | Notes |
 |---|---|---|---|
-| `vector_dot_hermitian` | Implemented | Missing | `nabled::arrow::vector::dot_hermitian` exists, but `ndatafusion` does not yet expose a complex vector SQL surface. |
-| `vector_batched_dot_hermitian` | Implemented | Missing | Row-wise Hermitian dot exists in `nabled`, but there is no complex batch vector catalog in `ndatafusion`. |
-| `vector_batched_l2_norm_complex` | Implemented | Missing | Complex row-wise vector norms exist in `nabled`; `ndatafusion` only exposes real-valued vector norms today. |
-| `vector_batched_cosine_similarity_complex` | Implemented | Missing | Complex cosine similarity exists in `nabled`; no SQL-facing complex vector contract is admitted yet. |
-| `vector_batched_normalize_complex` | Implemented | Missing | Complex batch normalization exists in `nabled`; `ndatafusion` has no complex vector UDFs yet. |
 | `matrix_matvec_complex`, `matrix_matmat_complex` | Implemented | Missing | Complex dense matrix products exist in `nabled::arrow::matrix`, but `ndatafusion` only exposes real-valued matrix products today. |
 | `matrix_column_means_complex`, `matrix_center_columns_complex` | Implemented | Missing | Complex statistics exist in `nabled::arrow::stats`, but `ndatafusion` does not yet expose a complex statistics surface. |
 | `matrix_covariance_complex`, `matrix_correlation_complex` | Implemented | Missing | Complex covariance and correlation are implemented in `nabled`, but `ndatafusion` currently stops at real-valued covariance/correlation. |
@@ -181,4 +224,6 @@ Examples:
 | `jacobi_preconditioner_csr_extension`, `apply_jacobi_preconditioner` | Implemented | Missing | Jacobi preconditioner construction and application exist in `nabled`, but there is no SQL-facing stateful contract in `ndatafusion` yet. |
 | `ilut_factor_csr_extension`, `iluk_factor_csr_extension` | Implemented | Missing | ILUT and ILUK factorization builders exist in `nabled::arrow::sparse`, but `ndatafusion` does not yet expose sparse factorization objects. |
 | `jacobian`, `gradient`, `hessian` | Implemented | Missing | Generic `nabled` APIs are callback-driven; `ndatafusion` needs named-function registry or specialized built-ins instead of a direct closure-based SQL surface. |
-| UDAFs, window functions, table functions, and planner rewrites | N/A | Missing | Explicitly deferred; the current `ndatafusion` implementation is scalar-UDF-first. |
+| Rolling covariance / correlation / regression window functions | N/A | Missing | The first grouped aggregate wave exists, but ordered windowed numerical workflows are still deferred. |
+| Sparse factorization / tensor-decomposition table functions | N/A | Missing | Aggregate UDFs are now in place for grouped fits, but table-shaped/stateful numerical outputs are still deferred. |
+| Planner rewrites and custom planning surfaces | N/A | Missing | Explicitly deferred beyond the current scalar-UDF plus first-wave aggregate surface. |

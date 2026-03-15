@@ -1,11 +1,12 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use nabled::core::prelude::NabledReal;
 use ndarray::Axis;
@@ -15,6 +16,7 @@ use super::common::{
     expect_fixed_size_list_arg, fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows,
     fixed_size_list_view2, map_arrow_error, nullable_or,
 };
+use super::docs::matrix_doc;
 use crate::error::exec_error;
 use crate::metadata::{
     fixed_shape_tensor_field, parse_matrix_batch_field, parse_vector_field, vector_field,
@@ -255,6 +257,25 @@ impl ScalarUDFImpl for MatrixMatmul {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Compute the row-wise dense matrix-matrix product for paired matrix batches.",
+                "matrix_matmul(left_batch, right_batch)",
+            )
+            .with_argument(
+                "left_batch",
+                "Left dense matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument(
+                "right_batch",
+                "Right dense matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -298,6 +319,26 @@ impl ScalarUDFImpl for MatrixMatvec {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Compute the row-wise dense matrix-vector product for paired matrix and vector \
+                 batches.",
+                "matrix_matvec(matrix_batch, rhs_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument(
+                "rhs_batch",
+                "Dense vector batch in canonical FixedSizeList<Float32|Float64>(D) form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -343,6 +384,26 @@ impl ScalarUDFImpl for MatrixLuSolve {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Solve each square dense system in the batch with LU factorization and a vector \
+                 right-hand side.",
+                "matrix_lu_solve(matrix_batch, rhs_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Square dense matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument(
+                "rhs_batch",
+                "Dense vector batch containing one right-hand side per matrix row.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -386,6 +447,26 @@ impl ScalarUDFImpl for MatrixCholeskySolve {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            matrix_doc(
+                "Solve each square dense system in the batch with Cholesky factorization and a \
+                 vector right-hand side.",
+                "matrix_cholesky_solve(matrix_batch, rhs_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Square dense matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument(
+                "rhs_batch",
+                "Dense vector batch containing one right-hand side per matrix row.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 

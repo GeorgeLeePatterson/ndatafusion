@@ -1,12 +1,13 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::array::{Array, FixedSizeListArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use nabled::core::prelude::NabledReal;
 use ndarray::{Array1, Array2, Array3, ArrayView2, ArrayView3, Axis};
@@ -17,12 +18,15 @@ use super::common::{
     expect_struct_arg, fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows,
     fixed_size_list_view2, nullable_or, primitive_array_from_values,
 };
+use super::docs::ml_doc;
 use crate::error::{exec_error, plan_error};
 use crate::metadata::{
     MatrixBatchContract, fixed_shape_tensor_field, parse_matrix_batch_field, parse_vector_field,
     scalar_field, struct_field, vector_field,
 };
-use crate::signatures::any_signature;
+use crate::signatures::{
+    ScalarCoercion, any_signature, coerce_scalar_arguments, named_any_signature,
+};
 
 fn invoke_matrix_batch_to_vector_output<T, E>(
     args: &ScalarFunctionArgs,
@@ -1008,7 +1012,9 @@ struct LinearRegression {
 }
 
 impl LinearRegression {
-    fn new() -> Self { Self { signature: any_signature(3) } }
+    fn new() -> Self {
+        Self { signature: named_any_signature(3, &["design", "response", "add_intercept"]) }
+    }
 }
 
 impl ScalarUDFImpl for LinearRegression {
@@ -1017,6 +1023,10 @@ impl ScalarUDFImpl for LinearRegression {
     fn name(&self) -> &'static str { "linear_regression" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_scalar_arguments(self.name(), arg_types, &[(3, ScalarCoercion::Boolean)])
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -1082,6 +1092,31 @@ impl ScalarUDFImpl for LinearRegression {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Fit an ordinary least-squares linear regression model for each design matrix and \
+                 response vector row.",
+                "linear_regression(design_batch, response_batch, add_intercept => true)",
+            )
+            .with_argument("design", "Dense matrix batch in canonical fixed-shape tensor form.")
+            .with_argument(
+                "response",
+                "Dense vector batch containing one response vector per design row.",
+            )
+            .with_argument(
+                "add_intercept",
+                "Boolean flag controlling whether an intercept column is added.",
+            )
+            .with_alternative_syntax(
+                "linear_regression(design => design_batch, response => response_batch, \
+                 add_intercept => true)",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 

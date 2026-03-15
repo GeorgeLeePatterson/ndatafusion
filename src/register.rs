@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use datafusion::common::Result;
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::ScalarUDF;
+use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 
-use crate::udfs;
+use crate::{udafs, udfs};
 
 fn register_udfs(
     registry: &mut dyn FunctionRegistry,
@@ -17,7 +17,18 @@ fn register_udfs(
     })
 }
 
-/// Register the `ndatafusion` scalar UDF catalog in a `FunctionRegistry`.
+fn register_udafs(
+    registry: &mut dyn FunctionRegistry,
+    udafs: impl IntoIterator<Item = Arc<AggregateUDF>>,
+) -> Result<()> {
+    udafs.into_iter().try_for_each(|udaf| {
+        let existing_udaf = registry.register_udaf(udaf)?;
+        drop(existing_udaf);
+        Ok(())
+    })
+}
+
+/// Register the `ndatafusion` scalar and aggregate UDF catalog in a `FunctionRegistry`.
 ///
 /// This is the entry point for making the `ndatafusion` SQL functions available to a
 /// `SessionContext` or any other `DataFusion` function registry.
@@ -26,7 +37,8 @@ fn register_udfs(
 ///
 /// Returns an error when the provided registry rejects UDF registration.
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
-    register_udfs(registry, udfs::all_default_functions())
+    register_udfs(registry, udfs::all_default_functions())?;
+    register_udafs(registry, udafs::all_default_aggregates())
 }
 
 #[cfg(test)]
@@ -39,7 +51,7 @@ mod tests {
     use datafusion::execution::registry::MemoryFunctionRegistry;
     use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
 
-    use super::{register_all, register_udfs};
+    use super::{register_all, register_udafs, register_udfs};
 
     fn stub_udf(name: &str) -> Arc<datafusion::logical_expr::ScalarUDF> {
         Arc::new(create_udf(
@@ -58,7 +70,9 @@ mod tests {
         register_all(&mut registry).expect("empty udf catalog should still register cleanly");
 
         assert!(registry.udfs().len() >= crate::udfs::all_default_functions().len());
+        assert!(registry.udafs().len() >= crate::udafs::all_default_aggregates().len());
         assert!(registry.udfs().contains("vector_l2_norm"));
+        assert!(registry.udafs().contains("vector_covariance_agg"));
         assert!(registry.udfs().contains("matrix_qr_solve_least_squares"));
     }
 
@@ -84,5 +98,16 @@ mod tests {
 
         assert_eq!(registry.udfs().len(), 1);
         assert!(registry.udfs().contains("vector_norm"));
+    }
+
+    #[test]
+    fn register_udafs_adds_new_udafs_to_the_registry() {
+        let mut registry = MemoryFunctionRegistry::new();
+
+        register_udafs(&mut registry, crate::udafs::all_default_aggregates())
+            .expect("udaf registration should succeed");
+
+        assert!(registry.udafs().contains("vector_covariance_agg"));
+        assert!(registry.udafs().contains("linear_regression_fit"));
     }
 }

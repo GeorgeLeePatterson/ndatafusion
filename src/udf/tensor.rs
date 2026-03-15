@@ -1,12 +1,12 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::types::{Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature,
 };
 use nabled::core::prelude::NabledReal;
 use ndarray::{Axis, IxDyn};
@@ -16,12 +16,15 @@ use super::common::{
     expect_fixed_size_list_arg, expect_struct_arg, expect_usize_scalar_arg,
     expect_usize_scalar_argument, fixed_shape_tensor_viewd, map_arrow_error, nullable_or,
 };
+use super::docs::tensor_doc;
 use crate::error::{exec_error, plan_error};
 use crate::metadata::{
     fixed_shape_tensor_field, parse_tensor_batch_field, parse_variable_shape_tensor_field,
     variable_shape_tensor_field,
 };
-use crate::signatures::any_signature;
+use crate::signatures::{
+    ScalarCoercion, any_signature, coerce_trailing_scalar_arguments, user_defined_signature,
+};
 
 fn reduced_shape(function_name: &str, shape: &[usize]) -> Result<Vec<usize>> {
     if shape.len() < 2 {
@@ -388,6 +391,22 @@ impl ScalarUDFImpl for TensorSumLastAxis {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Reduce each fixed-shape tensor row by summing over the last axis.",
+                "tensor_sum_last_axis(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_sum_last(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -443,6 +462,22 @@ impl ScalarUDFImpl for TensorL2NormLastAxis {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Reduce each fixed-shape tensor row by computing the L2 norm over the last axis.",
+                "tensor_l2_norm_last_axis(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_norm_last(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -496,6 +531,22 @@ impl ScalarUDFImpl for TensorNormalizeLastAxis {
         }
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Normalize each fixed-shape tensor row over the last axis.",
+                "tensor_normalize_last_axis(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_normalize_last(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -583,6 +634,27 @@ impl ScalarUDFImpl for TensorBatchedDotLastAxis {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Compute the row-wise batched dot product for paired fixed-shape tensor batches \
+                 over the last axis.",
+                "tensor_batched_dot_last_axis(left_batch, right_batch)",
+            )
+            .with_argument(
+                "left_batch",
+                "Left fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_argument(
+                "right_batch",
+                "Right fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_batched_dot_last(left_batch, right_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -596,7 +668,7 @@ struct TensorPermuteAxes {
 }
 
 impl TensorPermuteAxes {
-    fn new() -> Self { Self { signature: Signature::variadic_any(Volatility::Immutable) } }
+    fn new() -> Self { Self { signature: user_defined_signature() } }
 }
 
 impl ScalarUDFImpl for TensorPermuteAxes {
@@ -605,6 +677,10 @@ impl ScalarUDFImpl for TensorPermuteAxes {
     fn name(&self) -> &'static str { "tensor_permute_axes" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_trailing_scalar_arguments(self.name(), arg_types, 2, ScalarCoercion::Integer)
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -647,6 +723,25 @@ impl ScalarUDFImpl for TensorPermuteAxes {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Permute the axes of each fixed-shape tensor row using the supplied axis order.",
+                "tensor_permute_axes(tensor_batch, 1, 0, 2)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_argument(
+                "axis_i",
+                "Zero-based permutation axes supplied positionally after the tensor batch.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -655,7 +750,7 @@ struct TensorContractAxes {
 }
 
 impl TensorContractAxes {
-    fn new() -> Self { Self { signature: Signature::variadic_any(Volatility::Immutable) } }
+    fn new() -> Self { Self { signature: user_defined_signature() } }
 }
 
 impl ScalarUDFImpl for TensorContractAxes {
@@ -664,6 +759,10 @@ impl ScalarUDFImpl for TensorContractAxes {
     fn name(&self) -> &'static str { "tensor_contract_axes" }
 
     fn signature(&self) -> &Signature { &self.signature }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_trailing_scalar_arguments(self.name(), arg_types, 3, ScalarCoercion::Integer)
+    }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion::common::internal_err!("return_field_from_args should be used instead")
@@ -737,6 +836,30 @@ impl ScalarUDFImpl for TensorContractAxes {
                 Err(exec_error(self.name(), format!("unsupported tensor value type {actual}")))
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Contract paired fixed-shape tensor rows over the supplied left and right axis \
+                 pairs.",
+                "tensor_contract_axes(left_batch, right_batch, 1, 0)",
+            )
+            .with_argument(
+                "left_batch",
+                "Left fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_argument(
+                "right_batch",
+                "Right fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_argument(
+                "left_axis, right_axis",
+                "Zero-based axis pairs supplied positionally after the two tensor operands.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -845,6 +968,26 @@ impl ScalarUDFImpl for TensorBatchedMatmulLastTwo {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Compute the row-wise batched matrix product over the last two axes of paired \
+                 fixed-shape tensor batches.",
+                "tensor_batched_matmul_last_two(left_batch, right_batch)",
+            )
+            .with_argument(
+                "left_batch",
+                "Left fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .with_argument(
+                "right_batch",
+                "Right fixed-shape tensor batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -901,6 +1044,22 @@ impl ScalarUDFImpl for TensorVariableSumLastAxis {
         }
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Reduce each variable-shape tensor row by summing over the last axis.",
+                "tensor_variable_sum_last_axis(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Variable-shape tensor batch in canonical arrow.variable_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_var_sum_last(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -959,6 +1118,23 @@ impl ScalarUDFImpl for TensorVariableL2NormLastAxis {
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Reduce each variable-shape tensor row by computing the L2 norm over the last \
+                 axis.",
+                "tensor_variable_l2_norm_last_axis(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Variable-shape tensor batch in canonical arrow.variable_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_var_norm_last(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1012,6 +1188,22 @@ impl ScalarUDFImpl for TensorVariableNormalizeLastAxis {
             }
             .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Normalize each variable-shape tensor row over the last axis.",
+                "tensor_variable_normalize_last_axis(tensor_batch)",
+            )
+            .with_argument(
+                "tensor_batch",
+                "Variable-shape tensor batch in canonical arrow.variable_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_var_normalize_last(tensor_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -1099,6 +1291,27 @@ impl ScalarUDFImpl for TensorVariableBatchedDotLastAxis {
         }
         .map_err(|error| map_arrow_error(self.name(), error))?;
         Ok(ColumnarValue::Array(Arc::new(output.1)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            tensor_doc(
+                "Compute the row-wise batched dot product for paired variable-shape tensor \
+                 batches over the last axis.",
+                "tensor_variable_batched_dot_last_axis(left_batch, right_batch)",
+            )
+            .with_argument(
+                "left_batch",
+                "Left variable-shape tensor batch in canonical arrow.variable_shape_tensor form.",
+            )
+            .with_argument(
+                "right_batch",
+                "Right variable-shape tensor batch in canonical arrow.variable_shape_tensor form.",
+            )
+            .with_alternative_syntax("tensor_var_batched_dot_last(left_batch, right_batch)")
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
