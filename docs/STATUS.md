@@ -104,9 +104,14 @@ top of the released upstream contracts.
     - `matrix_log_svd_complex`
     - `matrix_power_complex`
     - `matrix_sign_complex`
-32. The registered catalog now spans 102 scalar UDFs plus 4 aggregate UDFs, with named-argument
+32. The current scalar catalog now also covers the complex PCA slice:
+    - `matrix_pca_complex`
+    - `matrix_pca_transform_complex`
+    - `matrix_pca_inverse_transform_complex`
+33. The registered catalog now spans 105 scalar UDFs plus 4 aggregate UDFs, with named-argument
     support for selected constructors, scalar control arguments, their complex iterative
-    counterparts, the configurable complex matrix-function slice, and `linear_regression_fit`.
+    counterparts, the configurable complex matrix-function slice, complex PCA, and
+    `linear_regression_fit`.
 
 ## Current Repository Reality
 

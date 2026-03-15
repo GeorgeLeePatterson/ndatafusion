@@ -10,7 +10,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::ScalarValue;
 use datafusion::common::utils::arrays_into_list_array;
 use datafusion::logical_expr::ColumnarValue;
-use ndarray::{Array1, Array2, Array3, Array4, Ix1, Ix2, Ix3, Ix4};
+use ndarray::{Array1, Array2, Array3, Array4, Axis, Ix1, Ix2, Ix3, Ix4};
 use num_complex::Complex64;
 
 use crate::metadata::{complex_vector_field, vector_field};
@@ -506,6 +506,21 @@ fn assert_pca_scores_from_struct<'a>(
         .expect("rank-3 scores")
 }
 
+fn assert_complex_pca_scores_from_struct<'a>(
+    return_field: &'a FieldRef,
+    output: &'a ColumnarValue,
+) -> ndarray::ArrayView3<'a, Complex64> {
+    let DataType::Struct(fields) = return_field.data_type() else {
+        panic!("expected complex PCA struct return");
+    };
+    let output = struct_array(output);
+    let scores = output.column(4).as_any().downcast_ref::<FixedSizeListArray>().expect("scores");
+    ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&fields[4], scores)
+        .expect("complex scores")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 complex scores")
+}
+
 #[test]
 fn constructor_udfs_build_fixed_shape_contracts() {
     let make_vector_udf = udfs::make_vector_udf();
@@ -994,10 +1009,10 @@ fn assert_complex_matrix_products(
         panic!("expected complex vector output");
     };
     assert_eq!(item_field.extension_type_name(), Some("ndarrow.complex64"));
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+    for row in 0..matrix_view.len_of(Axis(0)) {
         let expected = nabled::linalg::matrix::matvec_complex_view(
-            &matrix_view.index_axis(ndarray::Axis(0), row),
-            &vector_view.index_axis(ndarray::Axis(0), row),
+            &matrix_view.index_axis(Axis(0), row),
+            &vector_view.index_axis(Axis(0), row),
         )
         .expect("expected complex matvec");
         for col in 0..expected.len() {
@@ -1017,10 +1032,10 @@ fn assert_complex_matrix_products(
     )
     .expect("matrix_matmat_complex");
     let matmat = complex_fixed_shape_view3(&matmat_field, &matmat);
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+    for row in 0..matrix_view.len_of(Axis(0)) {
         let expected = nabled::linalg::matrix::matmat_complex_view(
-            &matrix_view.index_axis(ndarray::Axis(0), row),
-            &right_view.index_axis(ndarray::Axis(0), row),
+            &matrix_view.index_axis(Axis(0), row),
+            &right_view.index_axis(Axis(0), row),
         )
         .expect("expected complex matmat");
         for i in 0..expected.nrows() {
@@ -1048,10 +1063,9 @@ fn assert_complex_matrix_stats(matrix_field: &FieldRef, matrices: &FixedSizeList
     .expect("matrix_column_means_complex");
     let means =
         ndarrow::complex64_as_array_view2(fixed_size_list_array(&means)).expect("complex means");
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
-        let expected = nabled::ml::stats::column_means_complex_view(
-            &matrix_view.index_axis(ndarray::Axis(0), row),
-        );
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let expected =
+            nabled::ml::stats::column_means_complex_view(&matrix_view.index_axis(Axis(0), row));
         for col in 0..expected.len() {
             assert_complex_close(means[[row, col]], expected[col]);
         }
@@ -1066,10 +1080,9 @@ fn assert_complex_matrix_stats(matrix_field: &FieldRef, matrices: &FixedSizeList
     )
     .expect("matrix_center_columns_complex");
     let centered = complex_fixed_shape_view3(&center_field, &centered);
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
-        let expected = nabled::ml::stats::center_columns_complex_view(
-            &matrix_view.index_axis(ndarray::Axis(0), row),
-        );
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let expected =
+            nabled::ml::stats::center_columns_complex_view(&matrix_view.index_axis(Axis(0), row));
         for i in 0..expected.nrows() {
             for j in 0..expected.ncols() {
                 assert_complex_close(centered[[row, i, j]], expected[[i, j]]);
@@ -1086,9 +1099,9 @@ fn assert_complex_matrix_stats(matrix_field: &FieldRef, matrices: &FixedSizeList
     )
     .expect("matrix_covariance_complex");
     let covariance = complex_fixed_shape_view3(&covariance_field, &covariance);
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+    for row in 0..matrix_view.len_of(Axis(0)) {
         let expected = nabled::ml::stats::covariance_matrix_complex_view(
-            &matrix_view.index_axis(ndarray::Axis(0), row),
+            &matrix_view.index_axis(Axis(0), row),
         )
         .expect("expected complex covariance");
         for i in 0..expected.nrows() {
@@ -1107,9 +1120,9 @@ fn assert_complex_matrix_stats(matrix_field: &FieldRef, matrices: &FixedSizeList
     )
     .expect("matrix_correlation_complex");
     let correlation = complex_fixed_shape_view3(&correlation_field, &correlation);
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
+    for row in 0..matrix_view.len_of(Axis(0)) {
         let expected = nabled::ml::stats::correlation_matrix_complex_view(
-            &matrix_view.index_axis(ndarray::Axis(0), row),
+            &matrix_view.index_axis(Axis(0), row),
         )
         .expect("expected complex correlation");
         for i in 0..expected.nrows() {
@@ -1139,8 +1152,8 @@ fn assert_complex_matrix_tensor_output<E>(
     E: std::fmt::Display,
 {
     let output = complex_fixed_shape_view3(output_field, output);
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
-        let expected = op(&matrix_view.index_axis(ndarray::Axis(0), row))
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let expected = op(&matrix_view.index_axis(Axis(0), row))
             .unwrap_or_else(|error| panic!("expected output: {error}"));
         for i in 0..expected.nrows() {
             for j in 0..expected.ncols() {
@@ -1186,8 +1199,8 @@ fn assert_complex_two_tensor_struct_output<E>(
     .expect("second complex tensor")
     .into_dimensionality::<Ix3>()
     .expect("rank-3 second complex tensor");
-    for row in 0..matrix_view.len_of(ndarray::Axis(0)) {
-        let (expected_first, expected_second) = op(&matrix_view.index_axis(ndarray::Axis(0), row))
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let (expected_first, expected_second) = op(&matrix_view.index_axis(Axis(0), row))
             .unwrap_or_else(|error| panic!("expected output: {error}"));
         for i in 0..expected_first.nrows() {
             for j in 0..expected_first.ncols() {
@@ -3060,6 +3073,208 @@ fn matrix_pca_application_udfs_validate_contracts() {
         1,
     )
     .expect("matrix_pca");
+    let pca = struct_array(&pca_output).clone();
+
+    let transform_error = invoke_udf_error(
+        &pca_transform_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(wide_matrices)),
+            ColumnarValue::Array(Arc::new(pca.clone())),
+        ],
+        vec![wide_field, Arc::clone(&pca_field)],
+        &[None, None],
+        1,
+    );
+    let inverse_error = invoke_udf_error(
+        &pca_inverse_udf,
+        vec![ColumnarValue::Array(Arc::new(short_scores)), ColumnarValue::Array(Arc::new(pca))],
+        vec![short_score_field, pca_field],
+        &[None, None],
+        1,
+    );
+
+    assert!(transform_error.contains("matrix feature width mismatch"));
+    assert!(inverse_error.contains("score width mismatch"));
+}
+
+fn assert_complex_pca_fit_output(
+    field: &FieldRef,
+    matrices: &FixedSizeListArray,
+    pca_return_field: &FieldRef,
+    pca_output: &ColumnarValue,
+) -> Array3<Complex64> {
+    let DataType::Struct(pca_fields) = pca_return_field.data_type() else {
+        panic!("expected complex PCA struct return");
+    };
+    let pca = struct_array(pca_output);
+    let matrix_view = complex_matrix_view(field, matrices);
+
+    let explained =
+        pca.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("explained variance");
+    let explained =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(explained).expect("explained");
+    let ratio = pca
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("explained variance ratio");
+    let ratio = ndarrow::fixed_size_list_as_array2::<Float64Type>(ratio).expect("ratio");
+    let mean = pca.column(3).as_any().downcast_ref::<FixedSizeListArray>().expect("mean");
+    let mean = ndarrow::complex64_as_array_view2(mean).expect("complex mean");
+    let scores = assert_complex_pca_scores_from_struct(pca_return_field, pca_output).to_owned();
+    let components =
+        pca.column(0).as_any().downcast_ref::<FixedSizeListArray>().expect("components");
+    let components =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&pca_fields[0], components)
+            .expect("components")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 components");
+
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let expected =
+            nabled::ml::pca::compute_pca_complex_view(&matrix_view.index_axis(Axis(0), row), None)
+                .expect("expected complex pca");
+        for col in 0..expected.mean.len() {
+            assert_complex_close(mean[[row, col]], expected.mean[col]);
+        }
+        for col in 0..expected.explained_variance.len() {
+            assert_close(explained[[row, col]], expected.explained_variance[col]);
+            assert_close(ratio[[row, col]], expected.explained_variance_ratio[col]);
+        }
+        for i in 0..expected.scores.nrows() {
+            for j in 0..expected.scores.ncols() {
+                assert_complex_close(scores[[row, i, j]], expected.scores[[i, j]]);
+            }
+        }
+        for i in 0..expected.components.nrows() {
+            for j in 0..expected.components.ncols() {
+                assert_complex_close(components[[row, i, j]], expected.components[[i, j]]);
+            }
+        }
+    }
+
+    scores
+}
+
+fn assert_complex_pca_transform_inverse(
+    field: &FieldRef,
+    matrices: &FixedSizeListArray,
+    pca_return_field: &FieldRef,
+    pca_output: &ColumnarValue,
+    scores: &Array3<Complex64>,
+) {
+    let pca_transform_udf = udfs::matrix_pca_transform_complex_udf();
+    let pca_inverse_udf = udfs::matrix_pca_inverse_transform_complex_udf();
+    let pca = struct_array(pca_output).clone();
+    let matrix_view = complex_matrix_view(field, matrices);
+
+    let (transformed_field, transformed_output) = invoke_udf(
+        &pca_transform_udf,
+        vec![
+            ColumnarValue::Array(Arc::new(matrices.clone())),
+            ColumnarValue::Array(Arc::new(pca.clone())),
+        ],
+        vec![Arc::clone(field), Arc::clone(pca_return_field)],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_pca_transform_complex");
+    let transformed = complex_fixed_shape_view3(&transformed_field, &transformed_output);
+    for row in 0..transformed.len_of(Axis(0)) {
+        for i in 0..transformed.len_of(Axis(1)) {
+            for j in 0..transformed.len_of(Axis(2)) {
+                assert_complex_close(transformed[[row, i, j]], scores[[row, i, j]]);
+            }
+        }
+    }
+
+    let ColumnarValue::Array(transformed_array) = &transformed_output else {
+        panic!("expected array output");
+    };
+    let (reconstructed_field, reconstructed_output) = invoke_udf(
+        &pca_inverse_udf,
+        vec![
+            ColumnarValue::Array(Arc::clone(transformed_array)),
+            ColumnarValue::Array(Arc::new(pca)),
+        ],
+        vec![transformed_field, Arc::clone(pca_return_field)],
+        &[None, None],
+        2,
+    )
+    .expect("matrix_pca_inverse_transform_complex");
+    let reconstructed = complex_fixed_shape_view3(&reconstructed_field, &reconstructed_output);
+    for row in 0..reconstructed.len_of(Axis(0)) {
+        for i in 0..reconstructed.len_of(Axis(1)) {
+            for j in 0..reconstructed.len_of(Axis(2)) {
+                assert_complex_close(reconstructed[[row, i, j]], matrix_view[[row, i, j]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn complex_matrix_pca_udfs_cover_batch_outputs() {
+    let (field, matrices) = complex_matrix_batch("complex_pca", [
+        [
+            [Complex64::new(1.0, 1.0), Complex64::new(2.0, 0.0)],
+            [Complex64::new(3.0, 1.0), Complex64::new(4.0, 0.0)],
+            [Complex64::new(5.0, 1.0), Complex64::new(6.0, 0.0)],
+        ],
+        [
+            [Complex64::new(2.0, 0.0), Complex64::new(1.0, -1.0)],
+            [Complex64::new(4.0, 0.0), Complex64::new(3.0, -1.0)],
+            [Complex64::new(6.0, 0.0), Complex64::new(5.0, -1.0)],
+        ],
+    ]);
+    let pca_udf = udfs::matrix_pca_complex_udf();
+
+    let (pca_return_field, pca_output) = invoke_udf(
+        &pca_udf,
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(&field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_pca_complex");
+    let scores = assert_complex_pca_fit_output(&field, &matrices, &pca_return_field, &pca_output);
+    assert_complex_pca_transform_inverse(
+        &field,
+        &matrices,
+        &pca_return_field,
+        &pca_output,
+        &scores,
+    );
+}
+
+#[test]
+fn complex_matrix_pca_application_udfs_validate_contracts() {
+    let pca_udf = udfs::matrix_pca_complex_udf();
+    let pca_transform_udf = udfs::matrix_pca_transform_complex_udf();
+    let pca_inverse_udf = udfs::matrix_pca_inverse_transform_complex_udf();
+    let (fit_field, fit_matrices) = complex_matrix_batch("complex_fit", [[
+        [Complex64::new(1.0, 1.0), Complex64::new(2.0, 0.0)],
+        [Complex64::new(3.0, 1.0), Complex64::new(4.0, 0.0)],
+        [Complex64::new(5.0, 1.0), Complex64::new(6.0, 0.0)],
+    ]]);
+    let (wide_field, wide_matrices) = complex_matrix_batch("complex_wide", [[
+        [Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0), Complex64::new(3.0, 0.0)],
+        [Complex64::new(4.0, 0.0), Complex64::new(5.0, 0.0), Complex64::new(6.0, 0.0)],
+        [Complex64::new(7.0, 0.0), Complex64::new(8.0, 0.0), Complex64::new(9.0, 0.0)],
+    ]]);
+    let (short_score_field, short_scores) = complex_matrix_batch("complex_short_scores", [[
+        [Complex64::new(1.0, 0.0)],
+        [Complex64::new(0.0, 0.0)],
+        [Complex64::new(1.0, 0.0)],
+    ]]);
+
+    let (pca_field, pca_output) = invoke_udf(
+        &pca_udf,
+        vec![ColumnarValue::Array(Arc::new(fit_matrices.clone()))],
+        vec![Arc::clone(&fit_field)],
+        &[None],
+        1,
+    )
+    .expect("matrix_pca_complex");
     let pca = struct_array(&pca_output).clone();
 
     let transform_error = invoke_udf_error(

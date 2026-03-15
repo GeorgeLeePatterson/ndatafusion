@@ -83,7 +83,7 @@ For the user-facing SQL catalog, see [CATALOG.md](https://github.com/GeorgeLeePa
 For quick copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
 For runnable examples, see `cargo run --example hello_sql`, `cargo run --example direct_arrow_vectors`, and `cargo run --example pca_pipeline`.
 
-`ndatafusion` registers a direct batch-native catalog across 102 scalar UDFs and 4 aggregate UDFs:
+`ndatafusion` registers a direct batch-native catalog across 105 scalar UDFs and 4 aggregate UDFs:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
@@ -108,14 +108,14 @@ For runnable examples, see `cargo run --example hello_sql`, `cargo run --example
 8. fixed-shape tensor last-axis reductions, normalization, batched products, row-wise
    permutation/contraction, variable-shape tensor last-axis workflows, and the first complex
    fixed-shape / variable-shape tensor norm / normalization surface
-9. matrix column means, PCA fit plus PCA transform/inverse-transform, dense iterative solvers,
-   linear regression, and grouped aggregate fits for vector covariance/correlation/PCA and linear
-   regression
+9. matrix column means, real and complex PCA fit plus PCA transform/inverse-transform, dense
+   iterative solvers, linear regression, and grouped aggregate fits for vector
+   covariance/correlation/PCA and linear regression
 10. sparse direct solve via `sparse_lu_solve`
 
 The current real-valued surface supports `Float32` and `Float64` across the implemented catalog.
 The current complex-valued surface covers canonical `ndarrow.complex64` dense vector, dense
-matrix, fixed-shape tensor, and variable-shape tensor inputs. The
+matrix, complex PCA, fixed-shape tensor, and variable-shape tensor inputs. The
 crate also has end-to-end SQL integration coverage for:
 
 1. literal-backed constructor pipelines

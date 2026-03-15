@@ -262,12 +262,23 @@ order:
     - direct SQL integration coverage now exercises canonical complex-matrix spectral and
       matrix-function inputs without `make_*`
     - the registered catalog now exposes 102 scalar UDFs plus 4 aggregate UDFs
+31. `D-031`: `N-011` has advanced on the complex PCA slice:
+    - `matrix_pca_complex` now exists with a mixed-type struct contract:
+      complex `components`, `mean`, and `scores`, plus `Float64` explained-variance fields
+    - `matrix_pca_transform_complex` now exists over canonical complex matrix batches plus the
+      complex PCA struct contract
+    - `matrix_pca_inverse_transform_complex` now exists over canonical complex score batches plus
+      the same complex PCA struct contract
+    - direct unit coverage and SQL integration coverage now exercise canonical complex PCA fit /
+      transform / inverse-transform without `make_*`
+    - the registered catalog now exposes 105 scalar UDFs plus 4 aggregate UDFs
 
 ## Next
 
 1. `N-011` (`Layer 3`, `ndatafusion`): Plan and implement the next post-v1 surface explicitly:
-   - richer complex spectral contracts beyond the current Schur/polar and matrix-function slice,
-   - complex PCA and other remaining admitted complex ML/stat surfaces,
+   - richer complex spectral contracts beyond the current Schur/polar, matrix-function, and
+     complex PCA slice,
+   - other remaining admitted complex ML/stat surfaces,
    - callback-driven differentiation / optimization,
    - stateful sparse factorization reuse,
    - second-wave aggregate, window, table-function, and planner surfaces.

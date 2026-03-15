@@ -460,13 +460,28 @@ pub fn matrix_correlation_complex(matrix: Expr) -> Expr {
 pub fn matrix_pca(matrix: Expr) -> Expr { udfs::matrix_pca_udf().call(vec![matrix]) }
 
 #[must_use]
+pub fn matrix_pca_complex(matrix: Expr) -> Expr {
+    udfs::matrix_pca_complex_udf().call(vec![matrix])
+}
+
+#[must_use]
 pub fn matrix_pca_transform(matrix: Expr, pca: Expr) -> Expr {
     udfs::matrix_pca_transform_udf().call(vec![matrix, pca])
 }
 
 #[must_use]
+pub fn matrix_pca_transform_complex(matrix: Expr, pca: Expr) -> Expr {
+    udfs::matrix_pca_transform_complex_udf().call(vec![matrix, pca])
+}
+
+#[must_use]
 pub fn matrix_pca_inverse_transform(scores: Expr, pca: Expr) -> Expr {
     udfs::matrix_pca_inverse_transform_udf().call(vec![scores, pca])
+}
+
+#[must_use]
+pub fn matrix_pca_inverse_transform_complex(scores: Expr, pca: Expr) -> Expr {
+    udfs::matrix_pca_inverse_transform_complex_udf().call(vec![scores, pca])
 }
 
 #[must_use]
@@ -545,7 +560,8 @@ mod tests {
         matrix_log_determinant, matrix_log_eigen, matrix_log_eigen_complex, matrix_log_svd,
         matrix_log_svd_complex, matrix_log_taylor, matrix_lu, matrix_lu_solve,
         matrix_matmat_complex, matrix_matmul, matrix_matvec, matrix_matvec_complex, matrix_pca,
-        matrix_pca_inverse_transform, matrix_pca_transform, matrix_polar, matrix_polar_complex,
+        matrix_pca_complex, matrix_pca_inverse_transform, matrix_pca_inverse_transform_complex,
+        matrix_pca_transform, matrix_pca_transform_complex, matrix_polar, matrix_polar_complex,
         matrix_power, matrix_power_complex, matrix_qr, matrix_qr_condition_number,
         matrix_qr_pivoted, matrix_qr_reconstruct, matrix_qr_reduced, matrix_qr_solve_least_squares,
         matrix_schur, matrix_schur_complex, matrix_sign, matrix_sign_complex, matrix_solve_lower,
@@ -944,14 +960,25 @@ mod tests {
             1,
         );
         assert_scalar_function(matrix_pca(one.clone()), "matrix_pca", 1);
+        assert_scalar_function(matrix_pca_complex(one.clone()), "matrix_pca_complex", 1);
         assert_scalar_function(
             matrix_pca_transform(one.clone(), two.clone()),
             "matrix_pca_transform",
             2,
         );
         assert_scalar_function(
+            matrix_pca_transform_complex(one.clone(), two.clone()),
+            "matrix_pca_transform_complex",
+            2,
+        );
+        assert_scalar_function(
             matrix_pca_inverse_transform(one.clone(), two.clone()),
             "matrix_pca_inverse_transform",
+            2,
+        );
+        assert_scalar_function(
+            matrix_pca_inverse_transform_complex(one.clone(), two.clone()),
+            "matrix_pca_inverse_transform_complex",
             2,
         );
         assert_scalar_function(

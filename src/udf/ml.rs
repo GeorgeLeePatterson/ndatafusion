@@ -15,17 +15,18 @@ use ndarrow::NdarrowElement;
 
 use super::common::{
     complex_fixed_shape_tensor_array_from_flat_rows, complex_fixed_shape_tensor_view3,
-    complex_fixed_size_list_array_from_flat_rows, expect_bool_scalar_arg,
-    expect_bool_scalar_argument, expect_fixed_size_list_arg, expect_struct_arg,
-    fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows, fixed_size_list_view2,
-    nullable_or, primitive_array_from_values,
+    complex_fixed_size_list_array_from_flat_rows, complex_fixed_size_list_view2,
+    expect_bool_scalar_arg, expect_bool_scalar_argument, expect_fixed_size_list_arg,
+    expect_struct_arg, fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows,
+    fixed_size_list_view2, nullable_or, primitive_array_from_values,
 };
 use super::docs::ml_doc;
 use crate::error::{exec_error, plan_error};
 use crate::metadata::{
-    MatrixBatchContract, complex_fixed_shape_tensor_field, complex_vector_field,
-    fixed_shape_tensor_field, parse_complex_matrix_batch_field, parse_matrix_batch_field,
-    parse_vector_field, scalar_field, struct_field, vector_field,
+    ComplexMatrixBatchContract, MatrixBatchContract, complex_fixed_shape_tensor_field,
+    complex_vector_field, fixed_shape_tensor_field, parse_complex_matrix_batch_field,
+    parse_complex_vector_field, parse_matrix_batch_field, parse_vector_field, scalar_field,
+    struct_field, vector_field,
 };
 use crate::signatures::{
     ScalarCoercion, any_signature, coerce_scalar_arguments, named_any_signature,
@@ -147,6 +148,13 @@ struct PcaContract {
     keep:       usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComplexPcaContract {
+    rows: usize,
+    cols: usize,
+    keep: usize,
+}
+
 fn parse_pca_field(field: &FieldRef, function_name: &str, position: usize) -> Result<PcaContract> {
     let DataType::Struct(fields) = field.data_type() else {
         return Err(plan_error(
@@ -231,6 +239,88 @@ fn parse_pca_field(field: &FieldRef, function_name: &str, position: usize) -> Re
         cols:       components.cols,
         keep:       components.rows,
     })
+}
+
+fn parse_complex_pca_field(
+    field: &FieldRef,
+    function_name: &str,
+    position: usize,
+) -> Result<ComplexPcaContract> {
+    let DataType::Struct(fields) = field.data_type() else {
+        return Err(plan_error(
+            function_name,
+            format!("argument {position} must be a complex PCA struct result"),
+        ));
+    };
+    if fields.len() != 5 {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "argument {position} must be a complex PCA struct with 5 fields, found {}",
+                fields.len()
+            ),
+        ));
+    }
+    for (index, expected) in
+        ["components", "explained_variance", "explained_variance_ratio", "mean", "scores"]
+            .into_iter()
+            .enumerate()
+    {
+        if fields[index].name() != expected {
+            return Err(plan_error(
+                function_name,
+                format!(
+                    "argument {position} field {} must be named {expected}, found {}",
+                    index + 1,
+                    fields[index].name()
+                ),
+            ));
+        }
+    }
+
+    let components =
+        parse_complex_matrix_batch_field(&Arc::clone(&fields[0]), function_name, position)?;
+    let explained = parse_vector_field(&Arc::clone(&fields[1]), function_name, position)?;
+    let explained_ratio = parse_vector_field(&Arc::clone(&fields[2]), function_name, position)?;
+    let (_mean_item, mean) =
+        parse_complex_vector_field(&Arc::clone(&fields[3]), function_name, position)?;
+    let scores =
+        parse_complex_matrix_batch_field(&Arc::clone(&fields[4]), function_name, position)?;
+    if explained.value_type != DataType::Float64 || explained_ratio.value_type != DataType::Float64
+    {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "argument {position} complex PCA variance fields must use Float64, found \
+                 explained {} and ratio {}",
+                explained.value_type, explained_ratio.value_type,
+            ),
+        ));
+    }
+    if components.rows != explained.len
+        || components.rows != explained_ratio.len
+        || components.rows != scores.cols
+    {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "argument {position} complex PCA component width mismatch: components rows {}, \
+                 explained {}, ratio {}, scores cols {}",
+                components.rows, explained.len, explained_ratio.len, scores.cols,
+            ),
+        ));
+    }
+    if components.cols != mean.len {
+        return Err(plan_error(
+            function_name,
+            format!(
+                "argument {position} complex PCA feature width mismatch: components cols {}, mean \
+                 len {}",
+                components.cols, mean.len
+            ),
+        ));
+    }
+    Ok(ComplexPcaContract { rows: scores.rows, cols: components.cols, keep: components.rows })
 }
 
 fn expect_pca_fixed_size_list<'a>(
@@ -359,6 +449,108 @@ where
     Ok(ColumnarValue::Array(Arc::new(output)))
 }
 
+fn invoke_matrix_pca_transform_complex(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    matrix: &ComplexMatrixBatchContract,
+    pca: &ComplexPcaContract,
+) -> Result<ColumnarValue> {
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let pca_struct = expect_struct_arg(args, 2, function_name)?;
+    let matrix_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], matrices, function_name)?;
+    let components_field = pca_child_field(args, 0, function_name)?;
+    let components_array = expect_pca_fixed_size_list(pca_struct, 0, function_name, "components")?;
+    let mean_array = expect_pca_fixed_size_list(pca_struct, 3, function_name, "mean")?;
+    let components_view =
+        complex_fixed_shape_tensor_view3(&components_field, components_array, function_name)?;
+    let mean_view = complex_fixed_size_list_view2(mean_array, function_name)?;
+    if matrix_view.len_of(Axis(0)) != components_view.len_of(Axis(0))
+        || matrix_view.len_of(Axis(0)) != mean_view.nrows()
+    {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "batch length mismatch: {} matrices vs {} PCA rows",
+                matrix_view.len_of(Axis(0)),
+                pca_struct.len()
+            ),
+        ));
+    }
+
+    let batch = matrix_view.len_of(Axis(0));
+    let mut values = Vec::with_capacity(batch * matrix.rows * pca.keep);
+    for row in 0..batch {
+        let matrix_row = matrix_view.index_axis(Axis(0), row);
+        let components_row = components_view.index_axis(Axis(0), row);
+        let mean_row = mean_view.index_axis(Axis(0), row);
+        let mut centered = matrix_row.to_owned();
+        for mut sample in centered.rows_mut() {
+            sample -= &mean_row;
+        }
+        let projection = components_row.t().mapv(|value| value.conj());
+        let scores = centered.dot(&projection);
+        values.extend(scores.iter().copied());
+    }
+    let (_field, output) = complex_fixed_shape_tensor_array_from_flat_rows(
+        function_name,
+        batch,
+        &[matrix.rows, pca.keep],
+        values,
+    )?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
+fn invoke_matrix_pca_inverse_transform_complex(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    scores: &ComplexMatrixBatchContract,
+    pca: &ComplexPcaContract,
+) -> Result<ColumnarValue> {
+    let score_array = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let pca_struct = expect_struct_arg(args, 2, function_name)?;
+    let score_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], score_array, function_name)?;
+    let components_field = pca_child_field(args, 0, function_name)?;
+    let components_array = expect_pca_fixed_size_list(pca_struct, 0, function_name, "components")?;
+    let mean_array = expect_pca_fixed_size_list(pca_struct, 3, function_name, "mean")?;
+    let components_view =
+        complex_fixed_shape_tensor_view3(&components_field, components_array, function_name)?;
+    let mean_view = complex_fixed_size_list_view2(mean_array, function_name)?;
+    if score_view.len_of(Axis(0)) != components_view.len_of(Axis(0))
+        || score_view.len_of(Axis(0)) != mean_view.nrows()
+    {
+        return Err(exec_error(
+            function_name,
+            format!(
+                "batch length mismatch: {} score matrices vs {} PCA rows",
+                score_view.len_of(Axis(0)),
+                pca_struct.len()
+            ),
+        ));
+    }
+
+    let batch = score_view.len_of(Axis(0));
+    let mut values = Vec::with_capacity(batch * scores.rows * pca.cols);
+    for row in 0..batch {
+        let score_row = score_view.index_axis(Axis(0), row);
+        let components_row = components_view.index_axis(Axis(0), row);
+        let mean_row = mean_view.index_axis(Axis(0), row);
+        let mut reconstructed = score_row.dot(&components_row);
+        for mut sample in reconstructed.rows_mut() {
+            sample += &mean_row;
+        }
+        values.extend(reconstructed.iter().copied());
+    }
+    let (_field, output) = complex_fixed_shape_tensor_array_from_flat_rows(
+        function_name,
+        batch,
+        &[scores.rows, pca.cols],
+        values,
+    )?;
+    Ok(ColumnarValue::Array(Arc::new(output)))
+}
+
 struct PcaOutputs<T> {
     batch:                           usize,
     components_values:               Vec<T>,
@@ -391,6 +583,46 @@ where
     for row in 0..batch {
         let result = nabled::ml::pca::compute_pca_view(&matrix_view.index_axis(Axis(0), row), None)
             .map_err(|error| exec_error(function_name, error))?;
+        outputs.components_values.extend(result.components.iter().copied());
+        outputs.explained_variance_values.extend(result.explained_variance.iter().copied());
+        outputs
+            .explained_variance_ratio_values
+            .extend(result.explained_variance_ratio.iter().copied());
+        outputs.mean_values.extend(result.mean.iter().copied());
+        outputs.scores_values.extend(result.scores.iter().copied());
+    }
+    Ok(outputs)
+}
+
+struct ComplexPcaOutputs {
+    batch:                           usize,
+    components_values:               Vec<num_complex::Complex64>,
+    explained_variance_values:       Vec<f64>,
+    explained_variance_ratio_values: Vec<f64>,
+    mean_values:                     Vec<num_complex::Complex64>,
+    scores_values:                   Vec<num_complex::Complex64>,
+}
+
+fn collect_complex_pca_outputs(
+    function_name: &str,
+    matrix_view: &ArrayView3<'_, num_complex::Complex64>,
+) -> Result<ComplexPcaOutputs> {
+    let batch = matrix_view.len_of(Axis(0));
+    let rows = matrix_view.len_of(Axis(1));
+    let cols = matrix_view.len_of(Axis(2));
+    let keep = rows.min(cols);
+    let mut outputs = ComplexPcaOutputs {
+        batch,
+        components_values: Vec::with_capacity(batch * keep * cols),
+        explained_variance_values: Vec::with_capacity(batch * keep),
+        explained_variance_ratio_values: Vec::with_capacity(batch * keep),
+        mean_values: Vec::with_capacity(batch * cols),
+        scores_values: Vec::with_capacity(batch * rows * keep),
+    };
+    for row in 0..batch {
+        let result =
+            nabled::ml::pca::compute_pca_complex_view(&matrix_view.index_axis(Axis(0), row), None)
+                .map_err(|error| exec_error(function_name, error))?;
         outputs.components_values.extend(result.components.iter().copied());
         outputs.explained_variance_values.extend(result.explained_variance.iter().copied());
         outputs
@@ -467,6 +699,65 @@ where
     Ok(ColumnarValue::Array(Arc::new(struct_array)))
 }
 
+fn build_complex_pca_struct_array(
+    function_name: &str,
+    matrix: &ComplexMatrixBatchContract,
+    outputs: ComplexPcaOutputs,
+) -> Result<ColumnarValue> {
+    let keep = matrix.rows.min(matrix.cols);
+    let components = complex_fixed_shape_tensor_array_from_flat_rows(
+        function_name,
+        outputs.batch,
+        &[keep, matrix.cols],
+        outputs.components_values,
+    )?
+    .1;
+    let explained_variance = fixed_size_list_array_from_flat_rows::<Float64Type>(
+        function_name,
+        outputs.batch,
+        keep,
+        &outputs.explained_variance_values,
+    )?;
+    let explained_variance_ratio = fixed_size_list_array_from_flat_rows::<Float64Type>(
+        function_name,
+        outputs.batch,
+        keep,
+        &outputs.explained_variance_ratio_values,
+    )?;
+    let mean = complex_fixed_size_list_array_from_flat_rows(
+        function_name,
+        outputs.batch,
+        matrix.cols,
+        outputs.mean_values,
+    )?;
+    let scores = complex_fixed_shape_tensor_array_from_flat_rows(
+        function_name,
+        outputs.batch,
+        &[matrix.rows, keep],
+        outputs.scores_values,
+    )?
+    .1;
+    let struct_array = StructArray::new(
+        vec![
+            complex_fixed_shape_tensor_field("components", &[keep, matrix.cols], false)?,
+            vector_field("explained_variance", &DataType::Float64, keep, false)?,
+            vector_field("explained_variance_ratio", &DataType::Float64, keep, false)?,
+            complex_vector_field("mean", matrix.cols, false)?,
+            complex_fixed_shape_tensor_field("scores", &[matrix.rows, keep], false)?,
+        ]
+        .into(),
+        vec![
+            Arc::new(components),
+            Arc::new(explained_variance),
+            Arc::new(explained_variance_ratio),
+            Arc::new(mean),
+            Arc::new(scores),
+        ],
+        None,
+    );
+    Ok(ColumnarValue::Array(Arc::new(struct_array)))
+}
+
 fn invoke_matrix_pca_typed<T>(
     args: &ScalarFunctionArgs,
     function_name: &str,
@@ -480,6 +771,18 @@ where
     let matrix_view = fixed_shape_tensor_view3::<T>(&args.arg_fields[0], matrices, function_name)?;
     let outputs = collect_pca_outputs::<T>(function_name, &matrix_view)?;
     build_pca_struct_array::<T>(function_name, matrix, outputs)
+}
+
+fn invoke_matrix_pca_complex(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    matrix: &ComplexMatrixBatchContract,
+) -> Result<ColumnarValue> {
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], matrices, function_name)?;
+    let outputs = collect_complex_pca_outputs(function_name, &matrix_view)?;
+    build_complex_pca_struct_array(function_name, matrix, outputs)
 }
 
 struct LinearRegressionOutputs<T> {
@@ -1122,6 +1425,71 @@ impl ScalarUDFImpl for MatrixPca {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixPcaComplex {
+    signature: Signature,
+}
+
+impl MatrixPcaComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixPcaComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_pca_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let keep = matrix.rows.min(matrix.cols);
+        let components =
+            complex_fixed_shape_tensor_field("components", &[keep, matrix.cols], false)?;
+        let explained_variance =
+            vector_field("explained_variance", &DataType::Float64, keep, false)?;
+        let explained_variance_ratio =
+            vector_field("explained_variance_ratio", &DataType::Float64, keep, false)?;
+        let mean = complex_vector_field("mean", matrix.cols, false)?;
+        let scores = complex_fixed_shape_tensor_field("scores", &[matrix.rows, keep], false)?;
+        Ok(struct_field(
+            self.name(),
+            vec![
+                components.as_ref().clone(),
+                explained_variance.as_ref().clone(),
+                explained_variance_ratio.as_ref().clone(),
+                mean.as_ref().clone(),
+                scores.as_ref().clone(),
+            ],
+            args.arg_fields[0].is_nullable(),
+        ))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        invoke_matrix_pca_complex(&args, self.name(), &matrix)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Compute row-wise complex PCA over a batch of dense complex matrices.",
+                "matrix_pca_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct MatrixPcaTransform {
     signature: Signature,
 }
@@ -1206,6 +1574,78 @@ impl ScalarUDFImpl for MatrixPcaTransform {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixPcaTransformComplex {
+    signature: Signature,
+}
+
+impl MatrixPcaTransformComplex {
+    fn new() -> Self { Self { signature: any_signature(2) } }
+}
+
+impl ScalarUDFImpl for MatrixPcaTransformComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_pca_transform_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let pca = parse_complex_pca_field(&args.arg_fields[1], self.name(), 2)?;
+        if matrix.cols != pca.cols {
+            return Err(plan_error(
+                self.name(),
+                format!(
+                    "matrix feature width mismatch: expected {}, found {}",
+                    pca.cols, matrix.cols
+                ),
+            ));
+        }
+        complex_fixed_shape_tensor_field(
+            self.name(),
+            &[matrix.rows, pca.keep],
+            nullable_or(args.arg_fields),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let pca = parse_complex_pca_field(&args.arg_fields[1], self.name(), 2)?;
+        if matrix.cols != pca.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "matrix feature width mismatch: expected {}, found {}",
+                    pca.cols, matrix.cols
+                ),
+            ));
+        }
+        invoke_matrix_pca_transform_complex(&args, self.name(), &matrix, &pca)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Project each dense complex matrix row into the score space defined by an \
+                 existing complex PCA struct.",
+                "matrix_pca_transform_complex(matrix_batch, pca)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Dense complex matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument("pca", "Complex PCA struct produced by matrix_pca_complex.")
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct MatrixPcaInverseTransform {
     signature: Signature,
 }
@@ -1286,6 +1726,72 @@ impl ScalarUDFImpl for MatrixPcaInverseTransform {
                 Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
             }
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixPcaInverseTransformComplex {
+    signature: Signature,
+}
+
+impl MatrixPcaInverseTransformComplex {
+    fn new() -> Self { Self { signature: any_signature(2) } }
+}
+
+impl ScalarUDFImpl for MatrixPcaInverseTransformComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_pca_inverse_transform_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let scores = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let pca = parse_complex_pca_field(&args.arg_fields[1], self.name(), 2)?;
+        if scores.cols != pca.keep {
+            return Err(plan_error(
+                self.name(),
+                format!("score width mismatch: expected {}, found {}", pca.keep, scores.cols),
+            ));
+        }
+        complex_fixed_shape_tensor_field(
+            self.name(),
+            &[scores.rows, pca.cols],
+            nullable_or(args.arg_fields),
+        )
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scores = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        let pca = parse_complex_pca_field(&args.arg_fields[1], self.name(), 2)?;
+        if scores.cols != pca.keep {
+            return Err(exec_error(
+                self.name(),
+                format!("score width mismatch: expected {}, found {}", pca.keep, scores.cols),
+            ));
+        }
+        invoke_matrix_pca_inverse_transform_complex(&args, self.name(), &scores, &pca)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            ml_doc(
+                "Reconstruct dense complex matrices from complex PCA score batches plus an \
+                 existing complex PCA struct.",
+                "matrix_pca_inverse_transform_complex(score_batch, pca)",
+            )
+            .with_argument(
+                "score_batch",
+                "Dense complex score matrix batch in canonical fixed-shape tensor rank-2 form.",
+            )
+            .with_argument("pca", "Complex PCA struct produced by matrix_pca_complex.")
+            .build()
+        });
+        Some(&DOCUMENTATION)
     }
 }
 
@@ -1447,13 +1953,28 @@ pub fn matrix_correlation_complex_udf() -> Arc<ScalarUDF> {
 pub fn matrix_pca_udf() -> Arc<ScalarUDF> { Arc::new(ScalarUDF::new_from_impl(MatrixPca::new())) }
 
 #[must_use]
+pub fn matrix_pca_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixPcaComplex::new()))
+}
+
+#[must_use]
 pub fn matrix_pca_transform_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixPcaTransform::new()))
 }
 
 #[must_use]
+pub fn matrix_pca_transform_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixPcaTransformComplex::new()))
+}
+
+#[must_use]
 pub fn matrix_pca_inverse_transform_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixPcaInverseTransform::new()))
+}
+
+#[must_use]
+pub fn matrix_pca_inverse_transform_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixPcaInverseTransformComplex::new()))
 }
 
 #[must_use]
@@ -1484,6 +2005,26 @@ mod tests {
                 fixed_shape_tensor_field("scores", value_type, &[rows, keep], false)?
                     .as_ref()
                     .clone(),
+            ],
+            false,
+        ))
+    }
+
+    fn complex_pca_field(rows: usize, cols: usize, keep: usize) -> Result<FieldRef> {
+        Ok(struct_field(
+            "pca_complex",
+            vec![
+                complex_fixed_shape_tensor_field("components", &[keep, cols], false)?
+                    .as_ref()
+                    .clone(),
+                vector_field("explained_variance", &DataType::Float64, keep, false)?
+                    .as_ref()
+                    .clone(),
+                vector_field("explained_variance_ratio", &DataType::Float64, keep, false)?
+                    .as_ref()
+                    .clone(),
+                complex_vector_field("mean", cols, false)?.as_ref().clone(),
+                complex_fixed_shape_tensor_field("scores", &[rows, keep], false)?.as_ref().clone(),
             ],
             false,
         ))
@@ -1595,6 +2136,72 @@ mod tests {
         assert!(
             error.to_string().contains("expected PCA struct field metadata"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn complex_pca_field_validates_shape_and_type_contracts() {
+        let field = complex_pca_field(3, 2, 2).expect("complex pca field");
+        let contract = parse_complex_pca_field(&field, "matrix_pca_transform_complex", 2)
+            .expect("complex pca contract");
+        assert_eq!(contract, ComplexPcaContract { rows: 3, cols: 2, keep: 2 });
+
+        let wrong_variance = struct_field(
+            "pca_complex",
+            vec![
+                complex_fixed_shape_tensor_field("components", &[2, 2], false)
+                    .expect("components")
+                    .as_ref()
+                    .clone(),
+                vector_field("explained_variance", &DataType::Float32, 2, false)
+                    .expect("variance")
+                    .as_ref()
+                    .clone(),
+                vector_field("explained_variance_ratio", &DataType::Float64, 2, false)
+                    .expect("ratio")
+                    .as_ref()
+                    .clone(),
+                complex_vector_field("mean", 2, false).expect("mean").as_ref().clone(),
+                complex_fixed_shape_tensor_field("scores", &[3, 2], false)
+                    .expect("scores")
+                    .as_ref()
+                    .clone(),
+            ],
+            false,
+        );
+        let variance_error =
+            parse_complex_pca_field(&wrong_variance, "matrix_pca_transform_complex", 2)
+                .expect_err("wrong variance type should fail");
+        assert!(
+            variance_error.to_string().contains("must use Float64"),
+            "unexpected error: {variance_error}"
+        );
+
+        let renamed = struct_field(
+            "pca_complex",
+            vec![
+                Field::new("basis", field.data_type().clone(), false),
+                vector_field("explained_variance", &DataType::Float64, 2, false)
+                    .expect("variance")
+                    .as_ref()
+                    .clone(),
+                vector_field("explained_variance_ratio", &DataType::Float64, 2, false)
+                    .expect("ratio")
+                    .as_ref()
+                    .clone(),
+                complex_vector_field("mean", 2, false).expect("mean").as_ref().clone(),
+                complex_fixed_shape_tensor_field("scores", &[3, 2], false)
+                    .expect("scores")
+                    .as_ref()
+                    .clone(),
+            ],
+            false,
+        );
+        let rename_error = parse_complex_pca_field(&renamed, "matrix_pca_transform_complex", 2)
+            .expect_err("renamed complex PCA field should fail");
+        assert!(
+            rename_error.to_string().contains("must be named components"),
+            "unexpected error: {rename_error}"
         );
     }
 }

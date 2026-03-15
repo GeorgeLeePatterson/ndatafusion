@@ -224,8 +224,11 @@ order-sensitive.
 | `matrix_covariance` | Implemented | Row-wise covariance matrix. |
 | `matrix_correlation` | Implemented | Row-wise correlation matrix. |
 | `matrix_pca` | Implemented | Returns a PCA struct containing `components`, explained-variance fields, `mean`, and `scores`. |
+| `matrix_pca_complex` | Implemented | Returns a complex PCA struct with complex `components`, `mean`, `scores`, and `Float64` explained-variance fields. |
 | `matrix_pca_transform` | Implemented | Applies an existing PCA struct to a matrix batch. |
+| `matrix_pca_transform_complex` | Implemented | Applies an existing complex PCA struct to a dense complex matrix batch. |
 | `matrix_pca_inverse_transform` | Implemented | Reconstructs feature space from score batches plus an existing PCA struct. |
+| `matrix_pca_inverse_transform_complex` | Implemented | Reconstructs complex feature space from complex score batches plus an existing complex PCA struct. |
 | `matrix_conjugate_gradient` | Implemented | Dense iterative solve with explicit `tolerance` and `max_iterations`. |
 | `matrix_gmres` | Implemented | Dense GMRES solve with explicit `tolerance` and `max_iterations`. |
 | `linear_regression` | Implemented | Returns a struct containing `coefficients`, `fitted_values`, `residuals`, and `r_squared`. |
@@ -243,7 +246,6 @@ order-sensitive.
 
 | Method Or Surface | `nabled` | `ndatafusion` | Notes |
 |---|---|---|---|
-| `matrix_pca_complex` | Implemented | Missing | `nabled::arrow::pca::compute_complex` exists, but `ndatafusion` does not yet define a SQL-facing complex PCA contract. |
 | `matrix_eigen_nonsymmetric_f32`, `matrix_eigen_nonsymmetric_f64` | Implemented | Missing | `nabled::arrow::eigen::nonsymmetric_f32` and `nonsymmetric_f64` exist and return complex outputs; `ndatafusion` has not yet settled the SQL result contract for those complex results. |
 | `matrix_eigen_nonsymmetric_bi_f32`, `matrix_eigen_nonsymmetric_bi_f64` | Implemented | Missing | Bi-eigen variants with left and right eigenvectors exist in `nabled`, but require a richer complex struct contract in `ndatafusion`. |
 | `matrix_eigen_nonsymmetric_complex` | Implemented | Missing | Complex nonsymmetric eigendecomposition exists in `nabled::arrow::eigen`, but is not yet exposed in `ndatafusion`. |

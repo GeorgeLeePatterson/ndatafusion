@@ -280,6 +280,13 @@ pub(crate) fn complex_fixed_shape_tensor_view3<'a>(
         .map_err(|error| exec_error(function_name, error))
 }
 
+pub(crate) fn complex_fixed_size_list_view2<'a>(
+    array: &'a FixedSizeListArray,
+    function_name: &str,
+) -> Result<ArrayView2<'a, Complex64>> {
+    ndarrow::complex64_as_array_view2(array).map_err(|error| exec_error(function_name, error))
+}
+
 pub(crate) fn complex_fixed_size_list_array_from_flat_rows(
     function_name: &str,
     row_count: usize,

@@ -36,7 +36,9 @@ pub use crate::udf::ml::{
     linear_regression_udf, matrix_center_columns_complex_udf, matrix_center_columns_udf,
     matrix_column_means_complex_udf, matrix_column_means_udf, matrix_correlation_complex_udf,
     matrix_correlation_udf, matrix_covariance_complex_udf, matrix_covariance_udf,
-    matrix_pca_inverse_transform_udf, matrix_pca_transform_udf, matrix_pca_udf,
+    matrix_pca_complex_udf, matrix_pca_inverse_transform_complex_udf,
+    matrix_pca_inverse_transform_udf, matrix_pca_transform_complex_udf, matrix_pca_transform_udf,
+    matrix_pca_udf,
 };
 pub use crate::udf::sparse::{
     sparse_lu_solve_udf, sparse_matmat_dense_udf, sparse_matmat_sparse_udf, sparse_matvec_udf,
@@ -178,8 +180,11 @@ fn sparse_tensor_and_ml_functions() -> Vec<Arc<ScalarUDF>> {
         matrix_correlation_udf(),
         matrix_correlation_complex_udf(),
         matrix_pca_udf(),
+        matrix_pca_complex_udf(),
         matrix_pca_transform_udf(),
+        matrix_pca_transform_complex_udf(),
         matrix_pca_inverse_transform_udf(),
+        matrix_pca_inverse_transform_complex_udf(),
         linear_regression_udf(),
     ]
 }
@@ -204,13 +209,14 @@ mod tests {
         matrix_exp_eigen_complex_udf, matrix_exp_udf, matrix_gmres_complex_udf, matrix_gmres_udf,
         matrix_log_eigen_complex_udf, matrix_log_svd_complex_udf, matrix_log_taylor_udf,
         matrix_lu_solve_udf, matrix_matmat_complex_udf, matrix_matmul_udf,
-        matrix_matvec_complex_udf, matrix_matvec_udf, matrix_polar_complex_udf,
-        matrix_power_complex_udf, matrix_power_udf, matrix_qr_solve_least_squares_udf,
-        matrix_schur_complex_udf, matrix_sign_complex_udf, matrix_solve_lower_matrix_udf,
-        matrix_solve_lower_udf, matrix_solve_upper_matrix_udf, matrix_solve_upper_udf,
-        matrix_svd_truncated_udf, matrix_svd_with_tolerance_udf, sparse_lu_solve_udf,
-        sparse_matmat_dense_udf, sparse_matmat_sparse_udf, sparse_matvec_udf, sparse_transpose_udf,
-        tensor_batched_dot_last_axis_udf, tensor_batched_matmul_last_two_udf,
+        matrix_matvec_complex_udf, matrix_matvec_udf, matrix_pca_complex_udf,
+        matrix_pca_inverse_transform_complex_udf, matrix_pca_transform_complex_udf,
+        matrix_polar_complex_udf, matrix_power_complex_udf, matrix_power_udf,
+        matrix_qr_solve_least_squares_udf, matrix_schur_complex_udf, matrix_sign_complex_udf,
+        matrix_solve_lower_matrix_udf, matrix_solve_lower_udf, matrix_solve_upper_matrix_udf,
+        matrix_solve_upper_udf, matrix_svd_truncated_udf, matrix_svd_with_tolerance_udf,
+        sparse_lu_solve_udf, sparse_matmat_dense_udf, sparse_matmat_sparse_udf, sparse_matvec_udf,
+        sparse_transpose_udf, tensor_batched_dot_last_axis_udf, tensor_batched_matmul_last_two_udf,
         tensor_contract_axes_udf, tensor_l2_norm_last_axis_complex_udf,
         tensor_l2_norm_last_axis_udf, tensor_normalize_last_axis_complex_udf,
         tensor_normalize_last_axis_udf, tensor_permute_axes_udf, tensor_sum_last_axis_udf,
@@ -225,7 +231,7 @@ mod tests {
 
     #[test]
     fn default_udf_catalog_matches_current_surface() {
-        assert_eq!(all_default_functions().len(), 102);
+        assert_eq!(all_default_functions().len(), 105);
     }
 
     #[test]
@@ -376,6 +382,9 @@ mod tests {
             matrix_center_columns_complex_udf(),
             matrix_covariance_complex_udf(),
             matrix_correlation_complex_udf(),
+            matrix_pca_complex_udf(),
+            matrix_pca_transform_complex_udf(),
+            matrix_pca_inverse_transform_complex_udf(),
             matrix_exp_complex_udf(),
             matrix_exp_eigen_complex_udf(),
             matrix_log_eigen_complex_udf(),

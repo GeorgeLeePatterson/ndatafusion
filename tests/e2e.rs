@@ -25,6 +25,11 @@ fn assert_close32(actual: f32, expected: f32) {
     assert!(delta < 1.0e-5, "expected {expected}, got {actual}, delta {delta}");
 }
 
+fn assert_complex_close(actual: Complex64, expected: Complex64) {
+    assert_close(actual.re, expected.re);
+    assert_close(actual.im, expected.im);
+}
+
 fn float64_list_array(rows: Vec<Vec<f64>>) -> ListArray {
     ListArray::from_iter_primitive::<Float64Type, _, _>(
         rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
@@ -336,6 +341,20 @@ fn direct_complex_spectral_batch() -> Result<RecordBatch> {
     ])?)
 }
 
+fn direct_complex_pca_batch() -> Result<RecordBatch> {
+    let (matrix_field, matrix) = complex64_matrix_batch("matrix", [[
+        [Complex64::new(1.0, 1.0), Complex64::new(2.0, 0.0)],
+        [Complex64::new(3.0, 1.0), Complex64::new(4.0, 0.0)],
+        [Complex64::new(5.0, 1.0), Complex64::new(6.0, 0.0)],
+    ]]);
+    let schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false), matrix_field]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(matrix) as ArrayRef,
+    ])?)
+}
+
 fn assert_direct_complex_matrix_results(batch: &RecordBatch) {
     assert_eq!(batch.num_rows(), 2);
     assert_eq!(int64_column(batch, 0).values().as_ref(), &[1, 2]);
@@ -419,6 +438,66 @@ fn assert_direct_complex_spectral_results(batch: &RecordBatch) {
     assert_complex_matrix_column(batch, 6, log_values);
     assert_complex_matrix_column(batch, 7, power_values);
     assert_complex_matrix_column(batch, 8, identity);
+}
+
+fn assert_direct_complex_pca_results(batch: &RecordBatch) {
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(int64_column(batch, 0).value(0), 1);
+
+    let pca_field = batch.schema().field(1).clone();
+    let DataType::Struct(pca_fields) = pca_field.data_type() else {
+        panic!("expected complex PCA struct output");
+    };
+    let pca = struct_column(batch, 1);
+    let mean = pca.column(3).as_any().downcast_ref::<FixedSizeListArray>().expect("mean");
+    let mean = ndarrow::complex64_as_array_view2(mean).expect("complex mean");
+    let explained =
+        pca.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("explained variance");
+    let explained =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(explained).expect("explained");
+    let scores = pca.column(4).as_any().downcast_ref::<FixedSizeListArray>().expect("scores");
+    let scores = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&pca_fields[4], scores)
+        .expect("complex scores")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 complex scores");
+
+    assert_complex_close(mean[[0, 0]], Complex64::new(3.0, 1.0));
+    assert_complex_close(mean[[0, 1]], Complex64::new(4.0, 0.0));
+    assert_close(explained[[0, 0]], 8.0);
+    assert_close(explained[[0, 1]], 0.0);
+
+    let projected_field = batch.schema().field(2).clone();
+    let projected =
+        batch.column(2).as_any().downcast_ref::<FixedSizeListArray>().expect("projected scores");
+    let projected =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&projected_field, projected)
+            .expect("projected scores")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 projected scores");
+    for row in 0..scores.len_of(ndarray::Axis(1)) {
+        for col in 0..scores.len_of(ndarray::Axis(2)) {
+            assert_complex_close(projected[[0, row, col]], scores[[0, row, col]]);
+        }
+    }
+
+    let reconstructed_field = batch.schema().field(3).clone();
+    let reconstructed =
+        batch.column(3).as_any().downcast_ref::<FixedSizeListArray>().expect("reconstructed");
+    let reconstructed =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&reconstructed_field, reconstructed)
+            .expect("reconstructed")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 reconstructed");
+    let expected = [
+        [Complex64::new(1.0, 1.0), Complex64::new(2.0, 0.0)],
+        [Complex64::new(3.0, 1.0), Complex64::new(4.0, 0.0)],
+        [Complex64::new(5.0, 1.0), Complex64::new(6.0, 0.0)],
+    ];
+    for row in 0..3 {
+        for col in 0..2 {
+            assert_complex_close(reconstructed[[0, row, col]], expected[row][col]);
+        }
+    }
 }
 
 fn direct_complex_tensor_batch() -> Result<RecordBatch> {
@@ -1676,6 +1755,38 @@ async fn sql_pca_application_queries_execute() -> Result<()> {
     assert_close(reconstructed[[0, 0, 1]], 2.0);
     assert_close(reconstructed[[0, 2, 0]], 5.0);
     assert_close(reconstructed[[0, 2, 1]], 6.0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_complex_pca_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    drop(ctx.register_batch("direct_complex_pca", direct_complex_pca_batch()?)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                pca,
+                matrix_pca_transform_complex(matrix, pca) AS projected,
+                matrix_pca_inverse_transform_complex(pca.scores, pca) AS reconstructed
+             FROM (
+                SELECT
+                    id,
+                    matrix,
+                    matrix_pca_complex(matrix) AS pca
+                FROM direct_complex_pca
+             )",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_direct_complex_pca_results(&batches[0]);
 
     Ok(())
 }

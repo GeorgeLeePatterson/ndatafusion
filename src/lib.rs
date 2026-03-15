@@ -8,7 +8,7 @@
 //! The current catalog supports `Float32` and `Float64` across dense vector, dense matrix, sparse
 //! CSR, fixed-shape tensor, variable-shape tensor, grouped statistics/model fits, and selected
 //! solver routines. The current complex-valued slice covers dense vector, dense matrix,
-//! fixed-shape tensor, and variable-shape tensor operations over canonical
+//! complex PCA, fixed-shape tensor, and variable-shape tensor operations over canonical
 //! `ndarrow.complex64` columns.
 //!
 //! Use the `make_*` constructor family when SQL starts from ordinary `List` values. If a table
@@ -71,7 +71,7 @@
 //! - dense matrix operations, decompositions, and direct solvers
 //! - sparse CSR operations
 //! - fixed-shape and variable-shape tensor operations, including the current complex tensor subset
-//! - statistics, PCA, iterative solvers, and linear regression
+//! - statistics, real and complex PCA, iterative solvers, and linear regression
 //! - grouped aggregate fits for covariance, correlation, PCA, and linear regression
 //!
 //! For the complete SQL function inventory and notes on result contracts, see `CATALOG.md` in the
