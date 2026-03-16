@@ -109,4 +109,4 @@ pub(crate) mod udtf;
 pub use register::{register_all, register_all_session};
 
 #[cfg(test)]
-mod udf_tests;
+mod udf_test_suite;
