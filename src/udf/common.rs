@@ -535,10 +535,13 @@ pub(crate) fn invoke_udf(
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::types::Float32Type;
-    use datafusion::arrow::array::{FixedSizeListArray, Float32Array, Int64Array};
+    use datafusion::arrow::array::types::{Float32Type, Int32Type, UInt64Type};
+    use datafusion::arrow::array::{
+        FixedSizeListArray, Float32Array, Int64Array, LargeListArray, ListArray,
+    };
     use datafusion::arrow::datatypes::{DataType, Field};
     use ndarray::Array2;
+    use num_complex::Complex64;
 
     use super::*;
 
@@ -771,5 +774,202 @@ mod tests {
             .expect("fixed-size list");
         assert_eq!(fixed.value_length(), 2);
         assert_eq!(fixed.values().data_type(), &DataType::Float32);
+    }
+
+    #[test]
+    fn usize_list_helpers_cover_scalar_and_error_paths() {
+        let list_scalar =
+            ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(0_i32), Some(2_i32), Some(4_i32)]),
+            ])));
+        let arg_fields = vec![dummy_field("axes")];
+        let scalar_refs = vec![Some(&list_scalar)];
+        let return_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &scalar_refs };
+        assert_eq!(
+            expect_usize_list_scalar_argument(&return_args, 1, "tensor_permute_axes")
+                .expect("usize list argument"),
+            vec![0, 2, 4]
+        );
+
+        let exec_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Scalar(list_scalar.clone())],
+            arg_fields:     vec![dummy_field("axes")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        assert_eq!(
+            expect_usize_list_scalar_arg(&exec_args, 1, "tensor_permute_axes")
+                .expect("usize list arg"),
+            vec![0, 2, 4]
+        );
+
+        let large_list_scalar = ScalarValue::LargeList(Arc::new(
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                Some(5_i32),
+                Some(6_i32),
+            ])]),
+        ));
+        let large_refs = vec![Some(&large_list_scalar)];
+        let large_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &large_refs };
+        assert_eq!(
+            expect_usize_list_scalar_argument(&large_args, 1, "tensor_permute_axes")
+                .expect("large usize list"),
+            vec![5, 6]
+        );
+
+        let unsigned_list_scalar =
+            ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<UInt64Type, _, _>(vec![
+                Some(vec![Some(1_u64), Some(3_u64)]),
+            ])));
+        let unsigned_refs = vec![Some(&unsigned_list_scalar)];
+        let unsigned_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &unsigned_refs };
+        assert_eq!(
+            expect_usize_list_scalar_argument(&unsigned_args, 1, "tensor_contract_axes")
+                .expect("u64 list argument"),
+            vec![1, 3]
+        );
+
+        let wrong_list_scalar =
+            ScalarValue::List(Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+                Some(vec![Some(1.0_f32), Some(2.0_f32)]),
+            ])));
+        let wrong_refs = vec![Some(&wrong_list_scalar)];
+        let wrong_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &wrong_refs };
+        let wrong_list_error =
+            expect_usize_list_scalar_argument(&wrong_args, 1, "tensor_permute_axes")
+                .expect_err("float list should fail");
+        assert!(wrong_list_error.to_string().contains("list of integer scalars"));
+
+        let null_refs = vec![Some(&ScalarValue::Null)];
+        let null_args =
+            ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &null_refs };
+        let null_list_error =
+            expect_usize_list_scalar_argument(&null_args, 1, "tensor_permute_axes")
+                .expect_err("null list should fail");
+        assert!(null_list_error.to_string().contains("must be a non-null scalar"));
+
+        let missing_args = ReturnFieldArgs { arg_fields: &arg_fields, scalar_arguments: &[] };
+        let missing_error =
+            expect_usize_list_scalar_argument(&missing_args, 1, "tensor_permute_axes")
+                .expect_err("missing list should fail");
+        assert!(missing_error.to_string().contains("must be a non-null scalar"));
+
+        let array_exec_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Array(Arc::new(Int64Array::from(vec![1_i64])))],
+            arg_fields:     vec![dummy_field("axes")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        let array_error = expect_usize_list_scalar_arg(&array_exec_args, 1, "tensor_permute_axes")
+            .expect_err("array list arg should fail");
+        assert!(array_error.to_string().contains("must be a list of integer scalars"));
+    }
+
+    #[test]
+    fn string_scalar_helpers_cover_scalar_and_error_paths() {
+        let string_value = ScalarValue::Utf8(Some("softmax".to_owned()));
+        let string_fields = vec![dummy_field("name")];
+        let string_refs = vec![Some(&string_value)];
+        let string_return_args =
+            ReturnFieldArgs { arg_fields: &string_fields, scalar_arguments: &string_refs };
+        assert_eq!(
+            expect_string_scalar_argument(&string_return_args, 1, "jacobian")
+                .expect("string scalar argument"),
+            "softmax"
+        );
+
+        let string_exec_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(
+                "sigmoid".to_owned(),
+            )))],
+            arg_fields:     vec![dummy_field("name")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        assert_eq!(
+            expect_string_scalar_arg(&string_exec_args, 1, "gradient")
+                .expect("string scalar exec arg"),
+            "sigmoid"
+        );
+
+        let wrong_string_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))],
+            arg_fields:     vec![dummy_field("name")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        let wrong_string_error = expect_string_scalar_arg(&wrong_string_args, 1, "jacobian")
+            .expect_err("boolean should fail string parsing");
+        assert!(wrong_string_error.to_string().contains("must be a string scalar"));
+
+        let null_refs = vec![Some(&ScalarValue::Null)];
+        let null_args =
+            ReturnFieldArgs { arg_fields: &string_fields, scalar_arguments: &null_refs };
+        let null_error = expect_string_scalar_argument(&null_args, 1, "jacobian")
+            .expect_err("null string should fail");
+        assert!(null_error.to_string().contains("must be a non-null scalar"));
+
+        let array_string_args = ScalarFunctionArgs {
+            args:           vec![ColumnarValue::Array(Arc::new(Float32Array::from(vec![1.0_f32])))],
+            arg_fields:     vec![dummy_field("name")],
+            number_rows:    1,
+            return_field:   dummy_field("return"),
+            config_options: Arc::new(ConfigOptions::new()),
+        };
+        let array_error = expect_string_scalar_arg(&array_string_args, 1, "jacobian")
+            .expect_err("array string should fail");
+        assert!(array_error.to_string().contains("must be a string scalar"));
+    }
+
+    #[test]
+    fn complex_storage_helpers_cover_flat_rows_and_tensor_views() {
+        let wrong_complex =
+            complex_fixed_size_list_array_from_flat_rows("vector_dot_hermitian", 2, 2, vec![
+                Complex64::new(1.0, 0.0),
+            ])
+            .expect_err("wrong complex row width should fail");
+        assert!(wrong_complex.to_string().contains("expected 4 complex values"));
+
+        let complex_vectors =
+            complex_fixed_size_list_array_from_flat_rows("vector_dot_hermitian", 2, 2, vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(-3.0, 0.5),
+            ])
+            .expect("complex vector rows");
+        let complex_view = complex_fixed_size_list_view2(&complex_vectors, "vector_dot_hermitian")
+            .expect("complex view");
+        assert_eq!(complex_view.shape(), &[2, 2]);
+
+        let (complex_tensor_field, complex_tensor) =
+            complex_fixed_shape_tensor_array_from_flat_rows(
+                "tensor_normalize_last_axis_complex",
+                1,
+                &[2, 2],
+                vec![
+                    Complex64::new(1.0, 0.0),
+                    Complex64::new(0.0, 1.0),
+                    Complex64::new(2.0, -1.0),
+                    Complex64::new(-3.0, 0.5),
+                ],
+            )
+            .expect("complex tensor");
+        let complex_tensor_field = Arc::new(complex_tensor_field);
+        let complex_tensor_view = complex_fixed_shape_tensor_view3(
+            &complex_tensor_field,
+            &complex_tensor,
+            "tensor_normalize_last_axis_complex",
+        )
+        .expect("complex tensor view");
+        assert_eq!(complex_tensor_view.shape(), &[1, 2, 2]);
     }
 }

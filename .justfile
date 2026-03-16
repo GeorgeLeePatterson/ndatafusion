@@ -26,12 +26,12 @@ test-integration test_name='':
 
 coverage:
     cargo llvm-cov clean --workspace
-    cargo llvm-cov --no-default-features --lib --tests --no-report
+    cargo llvm-cov --no-default-features --features test-utils --lib --tests --no-report
     cargo llvm-cov report -vv --html --ignore-filename-regex "{{ coverage_ignore_regex }}" --output-dir coverage --open
 
 coverage-lcov:
     cargo llvm-cov clean --workspace
-    cargo llvm-cov --no-default-features --lib --tests --no-report
+    cargo llvm-cov --no-default-features --features test-utils --lib --tests --no-report
     cargo llvm-cov report --lcov --ignore-filename-regex "{{ coverage_ignore_regex }}" --output-path lcov.info
 
 # --- EXAMPLES ---

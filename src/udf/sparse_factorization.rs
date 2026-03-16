@@ -1116,7 +1116,7 @@ where
     for (matrix_row, factorization) in
         ndarrow::csr_matrix_batch_iter::<T>(args.arg_fields[0].as_ref(), matrices)
             .map_err(|error| exec_error(function_name, error))?
-            .zip(factor_rows.into_iter())
+            .zip(factor_rows)
     {
         let (_, matrix_view) = matrix_row.map_err(|error| exec_error(function_name, error))?;
         let (_, rhs_view) = rhs_iter
@@ -1182,7 +1182,7 @@ where
     for (matrix_row, factorization) in
         ndarrow::csr_matrix_batch_iter::<T>(args.arg_fields[0].as_ref(), matrices)
             .map_err(|error| exec_error(function_name, error))?
-            .zip(factor_rows.into_iter())
+            .zip(factor_rows)
     {
         let (_, matrix_view) = matrix_row.map_err(|error| exec_error(function_name, error))?;
         let (_, rhs_view) = rhs_iter

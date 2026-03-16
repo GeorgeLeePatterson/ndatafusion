@@ -597,11 +597,15 @@ mod tests {
     use num_complex::Complex64;
 
     use super::{
+        ComplexMatrixBatchContract, ComplexTensorBatchContract, ComplexVariableShapeTensorContract,
         ComplexVectorContract, FixedShapeTensorWireMetadata, VariableShapeTensorWireMetadata,
-        complex_scalar_field, complex_vector_field, csr_matrix_batch_field, field_like,
-        fixed_shape_tensor_field, parse_complex_vector_field, parse_csr_matrix_batch_field,
-        parse_matrix_batch_field, parse_tensor_batch_field, parse_variable_shape_tensor_field,
-        parse_vector_field, scalar_field, struct_field, variable_shape_tensor_field, vector_field,
+        complex_fixed_shape_tensor_field, complex_scalar_field,
+        complex_variable_shape_tensor_field, complex_vector_field, csr_matrix_batch_field,
+        field_like, fixed_shape_tensor_field, parse_complex_matrix_batch_field,
+        parse_complex_tensor_batch_field, parse_complex_variable_shape_tensor_field,
+        parse_complex_vector_field, parse_csr_matrix_batch_field, parse_matrix_batch_field,
+        parse_tensor_batch_field, parse_variable_shape_tensor_field, parse_vector_field,
+        scalar_field, struct_field, variable_shape_tensor_field, vector_field,
     };
 
     #[test]
@@ -853,6 +857,131 @@ mod tests {
         assert_eq!(tensor_contract.shape, vec![2, 2]);
         assert_eq!(ragged_contract.value_type, DataType::Float32);
         assert_eq!(ragged_contract.uniform_shape, Some(vec![None]));
+    }
+
+    #[test]
+    fn complex_field_builders_and_parsers_cover_contracts() {
+        let complex_tensor =
+            complex_fixed_shape_tensor_field("tensor", &[2, 2], false).expect("complex tensor");
+        assert_eq!(complex_tensor.extension_type_name(), Some("arrow.fixed_shape_tensor"));
+        let complex_tensor_contract =
+            parse_complex_tensor_batch_field(&complex_tensor, "matrix_matmat_complex", 1)
+                .expect("complex tensor contract");
+        assert_eq!(complex_tensor_contract, ComplexTensorBatchContract { shape: vec![2, 2] });
+        let complex_matrix_contract =
+            parse_complex_matrix_batch_field(&complex_tensor, "matrix_matmat_complex", 1)
+                .expect("complex matrix contract");
+        assert_eq!(complex_matrix_contract, ComplexMatrixBatchContract { rows: 2, cols: 2 });
+
+        let complex_ragged =
+            complex_variable_shape_tensor_field("ragged", 2, Some(&[Some(2), None]), true)
+                .expect("complex ragged field");
+        assert_eq!(complex_ragged.extension_type_name(), Some("arrow.variable_shape_tensor"));
+        let complex_ragged_contract = parse_complex_variable_shape_tensor_field(
+            &complex_ragged,
+            "tensor_variable_normalize_last_axis_complex",
+            1,
+        )
+        .expect("complex ragged contract");
+        assert_eq!(complex_ragged_contract, ComplexVariableShapeTensorContract {
+            dimensions:    2,
+            uniform_shape: Some(vec![Some(2), None]),
+        });
+
+        let metadata_free_variable = Arc::new(
+            Field::new("ragged", complex_ragged.data_type().clone(), false).with_metadata(
+                HashMap::from([(
+                    "ARROW:extension:name".to_owned(),
+                    "arrow.variable_shape_tensor".to_owned(),
+                )]),
+            ),
+        );
+        let metadata_free_contract = parse_complex_variable_shape_tensor_field(
+            &metadata_free_variable,
+            "tensor_variable_normalize_last_axis_complex",
+            1,
+        )
+        .expect("metadata-free variable tensor should still parse");
+        assert_eq!(metadata_free_contract.uniform_shape, None);
+    }
+
+    #[test]
+    fn complex_field_parsers_reject_mismatches() {
+        let real_tensor =
+            fixed_shape_tensor_field("tensor", &DataType::Float64, &[2, 2], false).expect("tensor");
+        let complex_tensor_error =
+            parse_complex_tensor_batch_field(&real_tensor, "matrix_matmat_complex", 1)
+                .expect_err("real tensor should fail complex parser");
+        assert!(
+            complex_tensor_error
+                .to_string()
+                .contains("arrow.fixed_shape_tensor<ndarrow.complex64>")
+        );
+
+        let scalar = scalar_field("scalar", &DataType::Float64, false);
+        let scalar_tensor_error =
+            parse_complex_tensor_batch_field(&scalar, "matrix_matmat_complex", 1)
+                .expect_err("scalar should fail tensor parser");
+        assert!(scalar_tensor_error.to_string().contains("matrix_matmat_complex"));
+
+        let rank_three =
+            complex_fixed_shape_tensor_field("tensor", &[2, 2, 2], false).expect("rank-3 tensor");
+        let matrix_error =
+            parse_complex_matrix_batch_field(&rank_three, "matrix_matmat_complex", 1)
+                .expect_err("rank-3 tensor should fail matrix parser");
+        assert!(matrix_error.to_string().contains("rank-2 complex matrices"));
+
+        let scalar_variable_error = parse_complex_variable_shape_tensor_field(
+            &scalar,
+            "tensor_variable_normalize_last_axis_complex",
+            1,
+        )
+        .expect_err("scalar should fail complex variable tensor parser");
+        assert!(
+            scalar_variable_error
+                .to_string()
+                .contains("arrow.variable_shape_tensor<ndarrow.complex64>")
+        );
+
+        let complex_item = complex_scalar_field("item", false).expect("complex item");
+        let malformed_variable = {
+            let mut metadata = HashMap::new();
+            drop(metadata.insert(
+                "ARROW:extension:name".to_owned(),
+                "arrow.variable_shape_tensor".to_owned(),
+            ));
+            drop(
+                metadata.insert(
+                    "ARROW:extension:metadata".to_owned(),
+                    serde_json::to_string(&VariableShapeTensorWireMetadata {
+                        uniform_shape: Some(vec![Some(2), None]),
+                    })
+                    .expect("ragged metadata"),
+                ),
+            );
+            Arc::new(
+                Field::new(
+                    "ragged",
+                    DataType::Struct(
+                        vec![Field::new(
+                            "data",
+                            DataType::List(field_like("item", &complex_item, false)),
+                            false,
+                        )]
+                        .into(),
+                    ),
+                    false,
+                )
+                .with_metadata(metadata),
+            )
+        };
+        let malformed_error = parse_complex_variable_shape_tensor_field(
+            &malformed_variable,
+            "tensor_variable_normalize_last_axis_complex",
+            1,
+        )
+        .expect_err("missing shape field should fail");
+        assert!(malformed_error.to_string().contains("missing its shape field"));
     }
 
     #[test]
