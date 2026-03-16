@@ -12,7 +12,7 @@ sparse layouts produced by `ndarrow`, the numerical UDF can be called directly w
 
 ## Status Legend
 
-- `Implemented`: available today through `register_all`.
+- `Implemented`: available today through `register_all` or `register_all_session`.
 - `Partial`: lower-layer support or direction exists, but `ndatafusion` does not yet expose a full,
   settled SQL-facing UDF surface.
 - `Missing`: not currently exposed by `ndatafusion`.
@@ -42,6 +42,7 @@ includes:
 
 - `make_vector`
 - `make_matrix`
+- `make_tensor`
 - `make_variable_tensor`
 - `make_csr_matrix_batch`
 - `matrix_exp`
@@ -49,6 +50,9 @@ includes:
 - `matrix_log_taylor`
 - `matrix_power`
 - `matrix_power_complex`
+- `matrix_eigen_nonsymmetric`
+- `matrix_eigen_nonsymmetric_bi`
+- `matrix_eigen_nonsymmetric_complex`
 - `matrix_conjugate_gradient`
 - `matrix_gmres`
 - `matrix_conjugate_gradient_complex`
@@ -57,6 +61,25 @@ includes:
 - `matrix_svd_with_tolerance`
 - `linear_regression`
 - `linear_regression_fit`
+- `jacobian`
+- `jacobian_central`
+- `gradient`
+- `hessian`
+- `backtracking_line_search_complex`
+- `gradient_descent_complex`
+- `adam_complex`
+- `momentum_descent_complex`
+- `sparse_ilut_factor`
+- `sparse_iluk_factor`
+- `matrix_pca_complex`
+- `matrix_pca_transform_complex`
+- `matrix_pca_inverse_transform_complex`
+- `tensor_cp_als3`
+- `tensor_cp_als_nd`
+- `tensor_hosvd_nd`
+- `tensor_hooi_nd`
+- `tensor_tt_svd`
+- `tensor_tt_hadamard_round`
 
 For numerical UDFs with data operands followed by control scalars, prefer positional data
 arguments first and named trailing controls after. For example:
@@ -167,6 +190,8 @@ order-sensitive.
 | `matrix_svd_reconstruct` | Implemented | Reconstructs the original matrix from SVD output semantics. |
 | `matrix_eigen_symmetric` | Implemented | Returns a struct containing eigenvalues and eigenvectors for symmetric inputs. |
 | `matrix_eigen_generalized` | Implemented | Returns a struct containing eigenvalues and eigenvectors for generalized symmetric inputs. |
+| `matrix_eigen_nonsymmetric` | Implemented | Returns a struct containing complex `eigenvalues` and complex `schur_vectors` for each real square matrix batch row. |
+| `matrix_eigen_nonsymmetric_bi` | Implemented | Returns complex `eigenvalues`, complex left/right eigenvectors, real `balancing_diagonal`, and real `balanced_matrix` for each real square matrix batch row. |
 | `matrix_balance_nonsymmetric` | Implemented | Returns a struct containing the balanced matrix plus balancing diagonal. |
 | `matrix_schur` | Implemented | Returns a paired-matrix Schur struct result. |
 | `matrix_polar` | Implemented | Returns a paired-matrix polar-decomposition struct result. |
@@ -177,6 +202,7 @@ order-sensitive.
 
 | UDF | Status | Notes |
 |---|---|---|
+| `matrix_eigen_nonsymmetric_complex` | Implemented | Returns a struct containing complex `eigenvalues` and complex `schur_vectors` for each complex square matrix batch row. |
 | `matrix_schur_complex` | Implemented | Returns a complex paired-matrix Schur struct result with `q` and `t`. |
 | `matrix_polar_complex` | Implemented | Returns a complex paired-matrix polar-decomposition struct result with `u` and `p`. |
 
@@ -189,6 +215,15 @@ order-sensitive.
 | `sparse_matmat_dense` | Implemented | Row-wise CSR matrix times dense rank-2 variable-shape tensor batch. |
 | `sparse_transpose` | Implemented | CSR batch transpose. |
 | `sparse_matmat_sparse` | Implemented | Row-wise CSR matrix times CSR matrix batch. |
+
+## Matrix Equations
+
+| UDF | Status | Notes |
+|---|---|---|
+| `matrix_solve_sylvester` | Implemented | Solves `A X + X B = C` for each real batch row over canonical fixed-shape matrix batches. |
+| `matrix_solve_sylvester_mixed_f64` | Implemented | Mixed-precision Sylvester solve over `Float64` matrix batches with a struct result containing `solution` and `refinement_iterations`; requires `magma-system` at runtime. |
+| `matrix_solve_sylvester_complex` | Implemented | Solves `A X + X B = C` for each complex batch row over canonical `ndarrow.complex64` matrix batches. |
+| `matrix_solve_sylvester_mixed_complex` | Implemented | Mixed-precision complex Sylvester solve with a struct result containing `solution` and `refinement_iterations`; requires `magma-system` at runtime. |
 
 ## Tensor
 
@@ -242,24 +277,74 @@ order-sensitive.
 | `vector_pca_fit` | Implemented | Grouped PCA fit returning `components`, explained-variance fields, and `mean`. |
 | `linear_regression_fit` | Implemented | Grouped linear-regression fit returning `coefficients` and `r_squared`. |
 
-## Roadmap Items
+## Differentiation
 
-| Method Or Surface | `nabled` | `ndatafusion` | Notes |
-|---|---|---|---|
-| `matrix_eigen_nonsymmetric_f32`, `matrix_eigen_nonsymmetric_f64` | Implemented | Missing | `nabled::arrow::eigen::nonsymmetric_f32` and `nonsymmetric_f64` exist and return complex outputs; `ndatafusion` has not yet settled the SQL result contract for those complex results. |
-| `matrix_eigen_nonsymmetric_bi_f32`, `matrix_eigen_nonsymmetric_bi_f64` | Implemented | Missing | Bi-eigen variants with left and right eigenvectors exist in `nabled`, but require a richer complex struct contract in `ndatafusion`. |
-| `matrix_eigen_nonsymmetric_complex` | Implemented | Missing | Complex nonsymmetric eigendecomposition exists in `nabled::arrow::eigen`, but is not yet exposed in `ndatafusion`. |
-| `tensor_cp_als3`, `tensor_cp_als_nd` | Implemented | Missing | CP decomposition and related reporting/reconstruction helpers exist in `nabled::arrow::tensor`, but `ndatafusion` has not yet admitted a SQL-facing decomposition contract. |
-| `tensor_hosvd_nd`, `tensor_hooi_nd` | Implemented | Missing | Higher-order SVD and HOOI exist in `nabled`, but there is no settled `ndatafusion` SQL contract yet. |
-| `tensor_tucker_project`, `tensor_tucker_expand` | Implemented | Missing | Tucker projection and expansion exist in `nabled::arrow::tensor`, but are not yet exposed in `ndatafusion`. |
-| `tensor_tt_svd`, `tensor_tt_orthogonalize_left`, `tensor_tt_orthogonalize_right`, `tensor_tt_round` | Implemented | Missing | Tensor-train factorization and orthogonalization exist in `nabled`, but `ndatafusion` has no SQL-facing TT contract yet. |
-| `tensor_tt_inner`, `tensor_tt_norm`, `tensor_tt_add`, `tensor_tt_hadamard`, `tensor_tt_hadamard_round`, `tensor_tt_svd_reconstruct` | Implemented | Missing | Tensor-train algebra and reconstruction helpers exist in `nabled`; `ndatafusion` does not yet expose them. |
-| `solve_sylvester`, `solve_sylvester_mixed_f64`, `solve_sylvester_complex` | Implemented | Missing | Sylvester solvers exist in `nabled-linalg`, but `ndatafusion` does not yet expose a matrix-equation SQL surface. |
-| `gradient_descent_complex`, `adam_complex`, `momentum_descent_complex`, `backtracking_line_search_complex` | Implemented | Missing | Complex optimization helpers exist in `nabled`, but they are not yet shaped into a SQL-natural `ndatafusion` contract. |
-| `sparse_lu_factor_csr_extension`, `sparse_lu_solve_with_factorization_csr_extension`, `sparse_lu_solve_multiple_with_factorization_csr_extension` | Implemented | Missing | Stateful sparse LU factorization and reuse exist in `nabled::arrow::sparse`, but `ndatafusion` currently avoids object-carrying sparse state contracts. |
-| `jacobi_preconditioner_csr_extension`, `apply_jacobi_preconditioner` | Implemented | Missing | Jacobi preconditioner construction and application exist in `nabled`, but there is no SQL-facing stateful contract in `ndatafusion` yet. |
-| `ilut_factor_csr_extension`, `iluk_factor_csr_extension` | Implemented | Missing | ILUT and ILUK factorization builders exist in `nabled::arrow::sparse`, but `ndatafusion` does not yet expose sparse factorization objects. |
-| `jacobian`, `gradient`, `hessian` | Implemented | Missing | Generic `nabled` APIs are callback-driven; `ndatafusion` needs named-function registry or specialized built-ins instead of a direct closure-based SQL surface. |
-| Rolling covariance / correlation / regression window functions | N/A | Missing | The first grouped aggregate wave exists, but ordered windowed numerical workflows are still deferred. |
-| Sparse factorization / tensor-decomposition table functions | N/A | Missing | Aggregate UDFs are now in place for grouped fits, but table-shaped/stateful numerical outputs are still deferred. |
-| Planner rewrites and custom planning surfaces | N/A | Missing | Explicitly deferred beyond the current scalar-UDF plus first-wave aggregate surface. |
+| UDF | Status | Notes |
+|---|---|---|
+| `jacobian` | Implemented | Named-function Jacobian with explicit `step_size`, `tolerance`, and `max_iterations`. |
+| `jacobian_central` | Implemented | Named-function central-difference Jacobian with the same control contract. |
+| `gradient` | Implemented | Named-function gradient over canonical dense vector batches. |
+| `hessian` | Implemented | Named-function Hessian over canonical dense vector batches. |
+
+## Optimization
+
+| UDF | Status | Notes |
+|---|---|---|
+| `backtracking_line_search_complex` | Implemented | Named-function complex line-search helper with explicit control arguments. |
+| `gradient_descent_complex` | Implemented | Named-function complex gradient-descent helper. |
+| `momentum_descent_complex` | Implemented | Named-function complex momentum-descent helper. |
+| `adam_complex` | Implemented | Named-function complex Adam helper. |
+
+## Sparse Factorization And Preconditioners
+
+| UDF | Status | Notes |
+|---|---|---|
+| `sparse_lu_factor` | Implemented | Returns a sparse LU factorization struct over canonical CSR batches. |
+| `sparse_lu_solve_with_factorization` | Implemented | Solves dense rank-1 RHS batches from a sparse LU factorization struct. |
+| `sparse_lu_solve_multiple_with_factorization` | Implemented | Solves dense rank-2 RHS batches from a sparse LU factorization struct. |
+| `sparse_jacobi_preconditioner` | Implemented | Returns a Jacobi preconditioner struct. |
+| `sparse_apply_jacobi_preconditioner` | Implemented | Applies a Jacobi preconditioner struct to dense rank-1 RHS batches. |
+| `sparse_ilut_factor` | Implemented | Returns an ILUT factorization struct with explicit `drop_tolerance` and `max_fill`. |
+| `sparse_apply_ilut_preconditioner` | Implemented | Applies an ILUT factorization struct to dense rank-1 RHS batches. |
+| `sparse_iluk_factor` | Implemented | Returns an ILU(k) factorization struct with explicit `level_of_fill`. |
+| `sparse_apply_iluk_preconditioner` | Implemented | Applies an ILU(k) factorization struct to dense rank-1 RHS batches. |
+
+## Tensor Decomposition
+
+| UDF | Status | Notes |
+|---|---|---|
+| `tensor_cp_als3` | Implemented | Rank-3 CP-ALS decomposition over fixed-shape tensor batches. |
+| `tensor_cp_als3_reconstruct` | Implemented | Reconstructs from the CP-ALS3 struct contract. |
+| `tensor_cp_als_nd` | Implemented | N-dimensional CP-ALS decomposition over fixed-shape tensor batches. |
+| `tensor_cp_als_nd_reconstruct` | Implemented | Reconstructs from the CP-ALS-ND struct contract. |
+| `tensor_hosvd_nd` | Implemented | Higher-order SVD over fixed-shape tensor batches. |
+| `tensor_hooi_nd` | Implemented | Higher-order orthogonal iteration over fixed-shape tensor batches. |
+| `tensor_tucker_project` | Implemented | Projects a tensor batch into Tucker core space. |
+| `tensor_tucker_expand` | Implemented | Expands a Tucker core back into tensor space. |
+| `tensor_tt_svd` | Implemented | Tensor-train SVD with explicit `max_rank` and `tolerance`. |
+| `tensor_tt_svd_reconstruct` | Implemented | Reconstructs from the tensor-train SVD struct contract. |
+| `tensor_tt_orthogonalize_left` | Implemented | Left-orthogonalizes a tensor-train batch. |
+| `tensor_tt_orthogonalize_right` | Implemented | Right-orthogonalizes a tensor-train batch. |
+| `tensor_tt_round` | Implemented | Rounds a tensor-train batch to a target rank/tolerance. |
+| `tensor_tt_inner` | Implemented | Tensor-train inner-product helper. |
+| `tensor_tt_norm` | Implemented | Tensor-train norm helper. |
+| `tensor_tt_add` | Implemented | Tensor-train addition helper. |
+| `tensor_tt_hadamard` | Implemented | Tensor-train Hadamard-product helper. |
+| `tensor_tt_hadamard_round` | Implemented | Tensor-train Hadamard-product helper with explicit rounding controls. |
+
+## Table Functions And Window Usage
+
+| Surface | Status | Notes |
+|---|---|---|
+| `unpack_struct` | Implemented | Registered through `register_all_session`; expands a scalar struct-valued expression into a one-row relation. |
+| Ordered window use of aggregates | Implemented | The aggregate UDF wave supports retractable ordered windows through `OVER (...)` frames. |
+
+## Future Directions
+
+| Surface | Status | Notes |
+|---|---|---|
+| Additional planner hooks beyond `simplify` | Partial | Per-UDF simplify hooks are implemented today; other hooks should be added only when they improve optimization materially. |
+| Custom expression planning | Missing | Reserved for SQL shapes that cannot be represented cleanly as scalar, aggregate, or table functions. |
+| Richer table-function catalog | Partial | `unpack_struct` exists now; additional relation-shaped functions should be added only where they are clearer than struct-valued scalar outputs. |
+| Dedicated `WindowUDF` catalog | Partial | Rolling use cases already work through retractable aggregates; standalone window functions are optional, not required. |
+| crates.io publication | Missing | Still blocked by the upstream Arrow 58 / DataFusion published-release mismatch. |

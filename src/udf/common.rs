@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::types::ArrowPrimitiveType;
 use datafusion::arrow::array::{ArrayRef, FixedSizeListArray, PrimitiveArray, StructArray};
-use datafusion::arrow::datatypes::{Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 #[cfg(test)]
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::{DataFusionError, Result, ScalarValue};
@@ -125,6 +125,63 @@ fn scalar_usize(value: &ScalarValue, function_name: &str, position: usize) -> Re
     }
 }
 
+fn scalar_usize_list(
+    value: &ScalarValue,
+    function_name: &str,
+    position: usize,
+) -> Result<Vec<usize>> {
+    let list_values: ArrayRef = match value {
+        ScalarValue::List(array) => array.value(0),
+        ScalarValue::LargeList(array) => array.value(0),
+        ScalarValue::Null => return Err(scalar_argument_required(function_name, position)),
+        value => {
+            return Err(exec_error(
+                function_name,
+                format!("argument {position} must be a list of integer scalars, found {value:?}"),
+            ));
+        }
+    };
+    macro_rules! parse_primitive_list {
+        ($array_type:ty) => {{
+            let values = list_values.as_any().downcast_ref::<$array_type>().ok_or_else(|| {
+                exec_error(
+                    function_name,
+                    format!("argument {position} must be a list of integer scalars"),
+                )
+            })?;
+            values
+                .iter()
+                .map(|value| match value {
+                    Some(value) => usize::try_from(value).map_err(|_| {
+                        exec_error(
+                            function_name,
+                            format!(
+                                "argument {position} must contain non-negative integer values, \
+                                 found {value}"
+                            ),
+                        )
+                    }),
+                    None => Err(scalar_argument_required(function_name, position)),
+                })
+                .collect()
+        }};
+    }
+    match list_values.data_type() {
+        DataType::Int8 => parse_primitive_list!(datafusion::arrow::array::Int8Array),
+        DataType::Int16 => parse_primitive_list!(datafusion::arrow::array::Int16Array),
+        DataType::Int32 => parse_primitive_list!(datafusion::arrow::array::Int32Array),
+        DataType::Int64 => parse_primitive_list!(datafusion::arrow::array::Int64Array),
+        DataType::UInt8 => parse_primitive_list!(datafusion::arrow::array::UInt8Array),
+        DataType::UInt16 => parse_primitive_list!(datafusion::arrow::array::UInt16Array),
+        DataType::UInt32 => parse_primitive_list!(datafusion::arrow::array::UInt32Array),
+        DataType::UInt64 => parse_primitive_list!(datafusion::arrow::array::UInt64Array),
+        actual => Err(exec_error(
+            function_name,
+            format!("argument {position} must be a list of integer scalars, found list<{actual}>"),
+        )),
+    }
+}
+
 pub(crate) fn expect_usize_scalar_arg(
     args: &ScalarFunctionArgs,
     position: usize,
@@ -138,6 +195,20 @@ pub(crate) fn expect_usize_scalar_arg(
     }
 }
 
+pub(crate) fn expect_usize_list_scalar_arg(
+    args: &ScalarFunctionArgs,
+    position: usize,
+    function_name: &str,
+) -> Result<Vec<usize>> {
+    match &args.args[position - 1] {
+        ColumnarValue::Scalar(value) => scalar_usize_list(value, function_name, position),
+        ColumnarValue::Array(_) => Err(exec_error(
+            function_name,
+            format!("argument {position} must be a list of integer scalars"),
+        )),
+    }
+}
+
 pub(crate) fn expect_usize_scalar_argument(
     args: &ReturnFieldArgs<'_>,
     position: usize,
@@ -145,6 +216,17 @@ pub(crate) fn expect_usize_scalar_argument(
 ) -> Result<usize> {
     match args.scalar_arguments.get(position - 1).copied().flatten() {
         Some(value) => scalar_usize(value, function_name, position),
+        None => Err(scalar_argument_required(function_name, position)),
+    }
+}
+
+pub(crate) fn expect_usize_list_scalar_argument(
+    args: &ReturnFieldArgs<'_>,
+    position: usize,
+    function_name: &str,
+) -> Result<Vec<usize>> {
+    match args.scalar_arguments.get(position - 1).copied().flatten() {
+        Some(value) => scalar_usize_list(value, function_name, position),
         None => Err(scalar_argument_required(function_name, position)),
     }
 }
@@ -220,6 +302,43 @@ pub(crate) fn expect_bool_scalar_argument(
             function_name,
             format!("argument {position} expected Boolean scalar, found {value:?}"),
         )),
+    }
+}
+
+fn scalar_string(value: &ScalarValue, function_name: &str, position: usize) -> Result<String> {
+    match value {
+        ScalarValue::Utf8(Some(value)) | ScalarValue::LargeUtf8(Some(value)) => Ok(value.clone()),
+        ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Null => {
+            Err(scalar_argument_required(function_name, position))
+        }
+        value => Err(exec_error(
+            function_name,
+            format!("argument {position} must be a string scalar, found {value:?}"),
+        )),
+    }
+}
+
+pub(crate) fn expect_string_scalar_arg(
+    args: &ScalarFunctionArgs,
+    position: usize,
+    function_name: &str,
+) -> Result<String> {
+    match &args.args[position - 1] {
+        ColumnarValue::Scalar(value) => scalar_string(value, function_name, position),
+        ColumnarValue::Array(_) => {
+            Err(exec_error(function_name, format!("argument {position} must be a string scalar")))
+        }
+    }
+}
+
+pub(crate) fn expect_string_scalar_argument(
+    args: &ReturnFieldArgs<'_>,
+    position: usize,
+    function_name: &str,
+) -> Result<String> {
+    match args.scalar_arguments.get(position - 1).copied().flatten() {
+        Some(value) => scalar_string(value, function_name, position),
+        None => Err(scalar_argument_required(function_name, position)),
     }
 }
 
@@ -324,6 +443,25 @@ pub(crate) fn complex_fixed_shape_tensor_array_from_flat_rows(
     let output = ArrayD::from_shape_vec(IxDyn(&full_shape), values)
         .map_err(|error| exec_error(function_name, error))?;
     ndarrow::arrayd_complex64_to_fixed_shape_tensor(function_name, output)
+        .map_err(|error| exec_error(function_name, error))
+}
+
+pub(crate) fn fixed_shape_tensor_array_from_flat_rows<T>(
+    function_name: &str,
+    batch: usize,
+    shape: &[usize],
+    values: Vec<T::Native>,
+) -> Result<(Field, FixedSizeListArray)>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NdarrowElement,
+{
+    let mut full_shape = Vec::with_capacity(shape.len() + 1);
+    full_shape.push(batch);
+    full_shape.extend_from_slice(shape);
+    let output = ArrayD::from_shape_vec(IxDyn(&full_shape), values)
+        .map_err(|error| exec_error(function_name, error))?;
+    ndarrow::arrayd_to_fixed_shape_tensor(function_name, output)
         .map_err(|error| exec_error(function_name, error))
 }
 

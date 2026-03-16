@@ -4,297 +4,97 @@ Last updated: 2026-03-15
 
 ## Purpose
 
-This is the operational companion to `docs/CAPABILITY_MATRIX.md`.
+This is the canonical `Done / Next / Needed` tracker for `ndatafusion`.
 
-Use this file to resume work quickly after context compaction without re-auditing the full
-codebase.
+Use it to resume work without replaying the full implementation history.
 
-## Usage Rules
+## Current State
 
-1. Treat this file as the canonical `Done / Next / Needed` tracker.
-2. Update it in the same change set when non-trivial implementation work lands.
-3. Only do a full repository re-assessment if:
-   - this file is stale,
-   - statuses conflict with observed code, or
-   - architectural direction changed.
-
-## Current Baseline
-
-1. The repository is still a single crate, but it now has a real registration/catalog surface and
-   domain UDF modules.
-2. DataFusion is pinned to an Arrow-58-compatible git revision on `main`.
-3. `.justfile` quality gates are present and passing on the current tree.
-4. The repository now has authoritative planning docs and AGENTS bootstrap instructions.
-5. `ndatafusion` now depends on published `nabled 0.0.7` and `ndarrow 0.0.3`.
-6. A substantial real-valued numerical DataFusion catalog now exists across vector, matrix,
-   decomposition, sparse, tensor, and ML/stat slices.
-7. The catalog now includes SQL-native constructors for the canonical real-valued vector, matrix,
-   tensor, variable-tensor, and CSR sparse-batch contracts.
-8. README examples and end-to-end SQL integration coverage now exist for the constructor-backed
-   catalog.
-9. Publish hardening is now in place for the current git-consumed release posture, and the
-   non-controversial real-valued catalog is now complete on the current constructor-backed surface.
-10. Post-v1 expansion work has now started on the current git-consumed tree via complex-vector
-    scalar UDFs, the first complex matrix/stat/tensor/iterative scalar slice, custom coercion,
-    programmatic UDF documentation, and the first aggregate UDF wave.
-
-## V1 Publish Gate (Ordered, Required)
-
-`ndatafusion` is considered ready for a v1 publish only when all items below are complete, in
-order:
-
-1. Lower-layer Arrow contracts are batch-native, null-correct, and performance-appropriate for the
-   admitted numerical domains.
-2. Dependency and feature contract is explicit and stable (`nabled`, `ndarrow`, Arrow, DataFusion,
-   feature forwarding), and published upstream releases exist for the required lower-layer fixes.
-3. `register_all`, exported UDF constructors, and common error/metadata utilities are stable.
-4. Dense vector and matrix function slices are implemented and integration-tested.
-5. Struct-returning decomposition and solver contracts are implemented and documented.
-6. Sparse, tensor, and ML/stat capability parity is implemented for the admitted v1 surface.
-7. SQL constructors or normalizers exist for the canonical numerical value contracts.
-8. Docs, examples, tests, feature-matrix checks, and coverage are publish-ready.
+1. The crate now exposes a broad validated SQL catalog over `nabled` and `ndarrow`.
+2. The real-valued admitted surface is implemented across the constructor, scalar, aggregate, and
+   tensor-decomposition slices.
+3. The first complex surface is implemented across vectors, matrices, PCA, tensors, and complex
+   spectral / matrix-function helpers.
+4. The first non-scalar expansion is implemented:
+   - typed sufficient-statistics aggregate UDFs
+   - ordered window usage through retractable aggregate state
+   - the generic `unpack_struct` table function through `register_all_session`
+5. The first planner pass is implemented via per-UDF simplify hooks.
+6. The repository quality gates are green and line coverage is above `90%`.
 
 ## Done
 
-1. `D-001`: Project scaffold exists and `just checks` passes on the baseline crate.
-2. `D-002`: DataFusion is pinned to Arrow 58 via git revision `8d9b080882179b618a2057e042fc32865f6484b4`.
-3. `D-003`: Governance baseline now exists via `docs/README.md`, `docs/DECISIONS.md`,
-   `docs/CAPABILITY_MATRIX.md`, `docs/EXECUTION_TRACKER.md`, `docs/ARCHITECTURE.md`,
-   `docs/STATUS.md`, and aligned root `AGENTS.md`.
-4. `D-004`: Cross-layer gap analysis is now recorded: `ndarrow` needs explicit contract hardening,
-   `nabled::arrow` needs batch-native/null-aware/performance-aligned expansion, and `ndatafusion`
-   should prefer direct lower-layer delegation with codec lifting only as a fallback.
-5. `D-005`: The canonical ingress model is now concept-first: mathematical object families own one
-   canonical `rows-of-X` batch carrier, and standalone batching should prefer the same carriers
-   that `ndatafusion` will use.
-6. `D-006`: Upstream prerequisite checkpoints are now complete and published:
+1. Governance baseline: AGENTS, docs bootstrap, tracker discipline, and repository quality gates.
+2. Upstream dependency alignment:
    - `ndarrow 0.0.3`
    - `nabled 0.0.7`
-7. `D-007`: `ndatafusion` now depends on published `nabled 0.0.7`, enables `nabled/arrow`
-   unconditionally, depends on `ndarrow 0.0.3` directly, and mirrors the remaining `nabled`
-   feature flags one-for-one.
-8. `D-008`: The initial local extension-crate scaffold now exists via `register_all`, `functions`,
-   and `udfs`.
-9. `D-009`: `N-004` through `N-007` are now covered by the first local catalog:
-    - shared metadata, signature, and error helpers
-    - dense vector row ops
-    - batched dense matrix matmul and LU solve
-   - struct-valued LU decomposition
-   - sparse batch matvec
-   - fixed-shape tensor last-axis reduction
-   - matrix column means and linear regression
-10. `D-010`: The `N-004` through `N-007` catalog is now checkpoint-safe:
-    - contract-edge unit coverage exists for helpers and admitted UDF slices
-    - `just checks` passes on the current tree
-    - `cargo llvm-cov --no-default-features --summary-only --lib --test e2e`
-      reports line coverage above 90%
-11. `D-011`: `N-010` has now advanced substantially on the admitted real-valued surface:
-    - matrix inverse, determinant, and log-determinant
-    - Cholesky decomposition, solve, and inverse
-    - QR and SVD struct-return contracts
-    - matrix centering, covariance, correlation, and PCA
-    - sparse batch dense matmat, transpose, and sparse matmat
-    - fixed-shape and variable-shape tensor norm/normalize/dot/matmul expansions
-    - the catalog now exposes 35 registered scalar UDFs with coverage still above 90%
-12. `D-012`: `N-008` is now complete on the current real-valued contract:
-    - `make_vector`
-    - `make_matrix`
-    - `make_tensor`
-    - `make_variable_tensor`
-    - `make_csr_matrix_batch`
-    - constructor success/failure coverage now exists for scalar-literal-style and array-column
-      inputs
-13. `D-013`: `N-009` is now underway with real publish-facing usage coverage:
-    - README quick-start examples now use the constructor-backed SQL surface
-    - integration tests now exercise `SessionContext` registration plus SQL execution for
-      literal-backed constructor pipelines
-    - integration tests now exercise list-column-backed vector/matrix flows
-    - integration tests now exercise sparse-plus-variable-tensor and fixed-shape tensor pipelines
-14. `D-014`: `N-009` publish hardening is now complete for the current local release posture:
-    - README install guidance now reflects git consumption instead of implying crates.io
-      publication
-    - crate-level rustdoc now documents the constructor-backed real-valued contract and quick-start
-      usage
-    - docs.rs metadata is configured for `--no-default-features`
-    - `docs/PUBLISH_CHECKLIST.md` now records the release gate, release-note minimums, and the
-      current DataFusion git-dependency publication blocker
-15. `D-015`: `N-010` has advanced again on dense matrix/decomposition parity:
-    - row-wise `matrix_matvec` now exists over canonical matrix/vector batch carriers
-    - QR least-squares and QR condition-number helpers now exist on the direct real-valued matrix
-      batch surface
-    - SVD pseudo-inverse, condition-number, and rank helpers now exist on the direct real-valued
-      matrix batch surface
-    - SQL integration coverage now exercises the new matrix helper slice through constructor-backed
-      queries
-16. `D-016`: `N-010` has advanced again on matrix parity:
-    - lower/upper triangular vector solves now exist over canonical matrix/vector batch carriers
-    - lower/upper triangular matrix solves now exist over canonical matrix/matrix batch carriers
-    - zero-config matrix functions (`matrix_exp_eigen`, `matrix_log_eigen`, `matrix_log_svd`,
-      `matrix_sign`) now exist over square matrix batches
-    - the current catalog now exposes 54 registered scalar UDFs
-    - unit and SQL integration coverage now exercise the new triangular and matrix-function slice
-17. `D-017`: `N-010` has advanced again on configurable matrix-function parity:
-    - `matrix_exp` now exists over square matrix batches with explicit `max_terms` and
-      `tolerance` scalar arguments
-    - `matrix_log_taylor` now exists over square matrix batches with explicit `max_terms` and
-      `tolerance` scalar arguments
-    - `matrix_power` now exists over square matrix batches with an explicit scalar exponent
-    - shared scalar parsing helpers now cover integer and real scalar contracts directly
-    - the current catalog now exposes 57 registered scalar UDFs
-    - unit and SQL integration coverage now exercise the new parameterized matrix-function slice
-18. `D-018`: `N-010` has advanced again on decomposition variant parity:
-    - `matrix_qr_reduced` now exists over canonical matrix batches with the reduced QR struct
-      result contract
-    - `matrix_qr_pivoted` now exists over canonical matrix batches with an explicit permutation
-      matrix in the struct result
-    - `matrix_svd_truncated` now exists with an explicit scalar `k` argument
-    - `matrix_svd_with_tolerance` now exists with an explicit scalar tolerance argument
-    - `matrix_svd_null_space` now exists with a variable-shape tensor batch result contract
-    - the current catalog now exposes 62 registered scalar UDFs
-    - unit and SQL integration coverage now exercise the new decomposition-variant slice
-19. `D-019`: `N-010` has advanced again on spectral and orthogonalization parity:
-    - `matrix_eigen_symmetric` now exists over canonical square matrix batches with a struct
-      result contract for eigenvalues plus eigenvectors
-    - `matrix_eigen_generalized` now exists over canonical square matrix-pair batches with the
-      same struct result contract
-    - `matrix_schur` and `matrix_polar` now exist over canonical square matrix batches with
-      paired matrix struct results
-    - `matrix_gram_schmidt` and `matrix_gram_schmidt_classic` now exist over canonical matrix
-      batches as direct orthogonalization helpers
-    - the current catalog now exposes 68 registered scalar UDFs
-    - direct unit coverage, float32 branch coverage, contract-edge validation, and constructor-
-      backed SQL integration coverage now exercise the new spectral slice
-20. `D-020`: `N-010` has advanced again on iterative-solver parity:
-    - `matrix_conjugate_gradient` now exists over canonical square matrix/vector batch carriers
-      with explicit scalar `tolerance` and `max_iterations` arguments
-    - `matrix_gmres` now exists over canonical square matrix/vector batch carriers with the same
-      explicit scalar configuration
-    - the current catalog now exposes 70 registered scalar UDFs
-    - direct unit coverage, float32 branch coverage, contract-edge validation, and constructor-
-      backed SQL integration coverage now exercise the iterative solver slice
-21. `D-021`: `N-010` has advanced again on fixed-shape tensor parity:
-    - `tensor_permute_axes` now exists over canonical fixed-shape tensor batches with variadic
-      integer-axis SQL arguments and row-preserving batch semantics
-    - `tensor_contract_axes` now exists over canonical fixed-shape tensor batches with variadic
-      left/right integer-axis pairs and row-preserving batch semantics
-    - the current catalog now exposes 72 registered scalar UDFs
-    - direct unit coverage, float32 branch coverage, contract-edge validation, and constructor-
-      backed SQL integration coverage now exercise the new tensor-axis slice
-22. `D-022`: `N-010` has advanced again on decomposition-helper parity:
-    - `matrix_qr_reconstruct` now exists over canonical matrix batches as a direct real-valued
-      reconstruction helper
-    - `matrix_svd_reconstruct` now exists over canonical matrix batches as a direct real-valued
-      reconstruction helper
-    - the current catalog now exposes 74 registered scalar UDFs
-    - direct unit coverage, float32 branch coverage, and constructor-backed SQL integration
-      coverage now exercise the reconstruction helper slice
-23. `D-023`: `N-010` has advanced again on real-valued spectral-helper parity:
-    - `matrix_balance_nonsymmetric` now exists over canonical square matrix batches with a struct
-      result contract for the balanced matrix plus balancing diagonal
-    - the current catalog now exposes 75 registered scalar UDFs
-    - direct unit coverage, float32 branch coverage, square-contract validation, and
-      constructor-backed SQL integration coverage now exercise the balancing helper slice
-24. `D-024`: `N-010` has advanced again on PCA-application parity:
-    - `matrix_pca_transform` now exists over canonical matrix batches plus the existing PCA struct
-      contract
-    - `matrix_pca_inverse_transform` now exists over canonical score-matrix batches plus the same
-      PCA struct contract
-    - direct unit coverage, float32 branch coverage, contract-edge validation, and
-      constructor-backed SQL integration coverage now exercise the PCA application slice
-25. `D-025`: `N-010` has advanced again on sparse direct-solve parity:
-    - `sparse_lu_solve` now exists over canonical `ndarrow.csr_matrix_batch` inputs plus rank-1
-      variable-shape tensor RHS batches
-    - direct unit coverage, float32 branch coverage, contract-edge validation, and
-      constructor-backed SQL integration coverage now exercise the sparse direct-solve slice
-26. `D-026`: The non-controversial, SQL-natural, real-valued constructor-backed v1 surface is now
-    complete for the current git-consumed release posture:
-    - the current catalog now exposes 78 registered scalar UDFs
-    - `just checks` passes on the checkpoint tree
-    - line coverage remains above the repository gate
-    - remaining work is now intentionally controversial, post-v1, or blocked on upstream
-      DataFusion publication
-27. `D-027`: The first post-v1 upgrade wave is now in place:
-    - shared signatures now support custom scalar coercion for constructor dimensions, scalar
-      controls, and aggregate regression fit arguments
-    - programmatic `documentation()` now covers constructors, the main scalar operational surface,
-      and the first aggregate wave
-    - the scalar catalog now includes the first complex-vector SQL slice:
-      `vector_dot_hermitian`, `vector_l2_norm_complex`,
-      `vector_cosine_similarity_complex`, and `vector_normalize_complex`
-    - the public registration surface now also includes the first aggregate UDF wave:
-      `vector_covariance_agg`, `vector_correlation_agg`, `vector_pca_fit`,
-      and `linear_regression_fit`
-    - the current registered catalog now exposes 82 scalar UDFs plus 4 aggregate UDFs
-    - SQL integration coverage now exercises grouped aggregate queries for covariance,
-      correlation, PCA fit, and linear regression fit
-28. `D-028`: The first aggregate wave now follows the durable non-scalar convention:
-    - `vector_covariance_agg`, `vector_correlation_agg`, and `vector_pca_fit` now use typed
-      sufficient-statistics state (`count`, `mean`, and scatter matrix) instead of raw-row
-      accumulation
-    - `linear_regression_fit` now uses typed normal-equation state (`count`, `sum_x`, `xtx`,
-      `xty`, `sum_y`, `sum_y2`, `add_intercept`) instead of raw-row accumulation
-    - aggregate `state_fields()` are now explicit Arrow-native typed fields rather than opaque
-      binary payloads
-    - Arrow output materialization remains scoped to `evaluate`
-    - local checks and coverage remain above the repository gate after the redesign
-29. `D-029`: `N-011` has advanced on the first complex matrix/tensor/stat/iterative slice:
-    - `matrix_matvec_complex` and `matrix_matmat_complex` now exist over canonical complex matrix
-      batches
-    - `matrix_column_means_complex`, `matrix_center_columns_complex`,
-      `matrix_covariance_complex`, and `matrix_correlation_complex` now exist over canonical
-      complex matrix batches
-    - `matrix_conjugate_gradient_complex` and `matrix_gmres_complex` now exist over canonical
-      complex square matrix/vector batches with named trailing control arguments
-    - `tensor_l2_norm_last_axis_complex`, `tensor_normalize_last_axis_complex`,
-      `tensor_variable_l2_norm_last_axis_complex`, and
-      `tensor_variable_normalize_last_axis_complex` now exist over canonical complex fixed-shape
-      and variable-shape tensor batches
-    - the registered catalog now exposes 94 scalar UDFs plus 4 aggregate UDFs
-    - direct SQL integration coverage now exercises canonical complex vector, matrix, and tensor
-      inputs without `make_*`
-30. `D-030`: `N-011` has advanced on the richer complex decomposition and matrix-function slice:
-    - `matrix_schur_complex` and `matrix_polar_complex` now exist over canonical complex square
-      matrix batches and return complex paired-tensor struct contracts matching the real-valued
-      Schur/polar surface
-    - `matrix_exp_complex`, `matrix_exp_eigen_complex`, `matrix_log_eigen_complex`,
-      `matrix_log_svd_complex`, `matrix_power_complex`, and `matrix_sign_complex` now exist over
-      canonical complex square matrix batches
-    - direct SQL integration coverage now exercises canonical complex-matrix spectral and
-      matrix-function inputs without `make_*`
-    - the registered catalog now exposes 102 scalar UDFs plus 4 aggregate UDFs
-31. `D-031`: `N-011` has advanced on the complex PCA slice:
-    - `matrix_pca_complex` now exists with a mixed-type struct contract:
-      complex `components`, `mean`, and `scores`, plus `Float64` explained-variance fields
-    - `matrix_pca_transform_complex` now exists over canonical complex matrix batches plus the
-      complex PCA struct contract
-    - `matrix_pca_inverse_transform_complex` now exists over canonical complex score batches plus
-      the same complex PCA struct contract
-    - direct unit coverage and SQL integration coverage now exercise canonical complex PCA fit /
-      transform / inverse-transform without `make_*`
-    - the registered catalog now exposes 105 scalar UDFs plus 4 aggregate UDFs
+   - Arrow-58-compatible DataFusion git revision
+3. Base crate shape:
+   - `register_all`
+   - `register_all_session`
+   - public SQL-expression helpers
+   - shared metadata, signature, and error layers
+4. Constructor surface:
+   - `make_vector`
+   - `make_matrix`
+   - `make_tensor`
+   - `make_variable_tensor`
+   - `make_csr_matrix_batch`
+5. Real-valued scalar catalog:
+   - dense vector, matrix, sparse, tensor, matrix-function, decomposition, matrix-equation, and
+     ML/stat slices
+6. Complex scalar catalog:
+   - complex vectors
+   - complex matrices
+   - complex PCA
+   - complex tensors
+   - complex spectral and matrix-function slices
+7. Additional scalar expansions:
+   - named-function differentiation
+   - named-function complex optimization
+   - sparse factorization and preconditioners
+   - tensor decomposition and tensor-train workflows
+8. Aggregate catalog:
+   - `vector_covariance_agg`
+   - `vector_correlation_agg`
+   - `vector_pca_fit`
+   - `linear_regression_fit`
+9. Aggregate design cleanup:
+   - typed Arrow-native state fields
+   - sufficient-statistics state
+   - retractable window support
+10. Table-function surface:
+   - `unpack_struct`
+11. Planner integration:
+   - per-UDF simplify hooks for the admitted obvious rewrite cases
+12. Documentation and ergonomics:
+   - crate-level rustdoc
+   - README quick start
+   - catalog and exercises
+   - named arguments
+   - aliases
+   - programmatic `documentation()`
+   - custom scalar coercion
 
 ## Next
 
-1. `N-011` (`Layer 3`, `ndatafusion`): Plan and implement the next post-v1 surface explicitly:
-   - richer complex spectral contracts beyond the current Schur/polar, matrix-function, and
-     complex PCA slice,
-   - other remaining admitted complex ML/stat surfaces,
-   - callback-driven differentiation / optimization,
-   - stateful sparse factorization reuse,
-   - second-wave aggregate, window, table-function, and planner surfaces.
+Planning-only work remains:
+
+1. decide whether broader planner hooks are worthwhile beyond `simplify`
+2. decide whether custom expression planning is justified for future SQL forms
+3. decide whether any richer table-function catalog is actually better than struct-valued scalar
+   results plus `unpack_struct`
+4. decide whether any dedicated `WindowUDF` surfaces are needed beyond retractable aggregates
+5. revisit crates.io publication once DataFusion has a compatible published release line
 
 ## Needed
 
-1. Replace the temporary DataFusion git dependency once a published Arrow-58-compatible release
-   exists on crates.io.
-2. Decide which controversial or post-v1 capabilities are actually worth admitting after the
-   current aggregate-enabled release checkpoint.
-3. Continue the post-v1 performance pass after the aggregate redesign to reduce fallback
-   lift/assembly overhead where direct batch delegation is still impossible.
+When the next implementation round starts:
 
-## Round Scope Lock
-
-1. This round starts local `ndatafusion` implementation after the upstream prerequisite releases.
-2. The next execution round should start `N-011`: plan the next post-v1 surface now that the
-   first aggregate wave has been redesigned to typed sufficient-statistics state.
-3. Preserve the concept-first contract while release hardening and post-v1 planning continue.
+1. update this file in the same change set as any non-trivial surface-area change
+2. keep `CATALOG.md`, `docs/CAPABILITY_MATRIX.md`, and `docs/STATUS.md` aligned with the real
+   implemented catalog
+3. keep the aggregate design constraints intact:
+   - typed state
+   - sufficient statistics when exact
+   - Arrow output materialization only at `evaluate`

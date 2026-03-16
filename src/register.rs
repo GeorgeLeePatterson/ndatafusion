@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
+use datafusion::prelude::SessionContext;
 
 use crate::{udafs, udfs};
 
@@ -41,17 +42,34 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     register_udafs(registry, udafs::all_default_aggregates())
 }
 
+/// Register the full `ndatafusion` catalog, including table functions, in a
+/// [`SessionContext`].
+///
+/// This helper extends [`register_all`] with SQL-only surfaces that are not
+/// part of the generic [`FunctionRegistry`] trait, such as table functions.
+///
+/// # Errors
+///
+/// Returns an error when the provided context rejects UDF or UDAF registration.
+pub fn register_all_session(ctx: &mut SessionContext) -> Result<()> {
+    register_all(ctx)?;
+    ctx.register_udtf("unpack_struct", Arc::new(crate::udtf::UnpackStructTableFunction));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use datafusion::arrow::array::Float64Array;
     use datafusion::arrow::datatypes::DataType;
     use datafusion::common::ScalarValue;
     use datafusion::execution::FunctionRegistry;
     use datafusion::execution::registry::MemoryFunctionRegistry;
     use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
+    use datafusion::prelude::SessionContext;
 
-    use super::{register_all, register_udafs, register_udfs};
+    use super::{register_all, register_all_session, register_udafs, register_udfs};
 
     fn stub_udf(name: &str) -> Arc<datafusion::logical_expr::ScalarUDF> {
         Arc::new(create_udf(
@@ -74,6 +92,27 @@ mod tests {
         assert!(registry.udfs().contains("vector_l2_norm"));
         assert!(registry.udafs().contains("vector_covariance_agg"));
         assert!(registry.udfs().contains("matrix_qr_solve_least_squares"));
+    }
+
+    #[tokio::test]
+    async fn register_all_session_adds_table_functions() {
+        let mut ctx = SessionContext::new();
+        register_all_session(&mut ctx).expect("session registration should succeed");
+        assert!(ctx.state().table_functions().contains_key("unpack_struct"));
+
+        let batches = ctx
+            .sql("SELECT * FROM unpack_struct(named_struct('sign', 1.0, 'log_abs', 3.5))")
+            .await
+            .expect("query should plan")
+            .collect()
+            .await
+            .expect("query should execute");
+        let sign =
+            batches[0].column(0).as_any().downcast_ref::<Float64Array>().expect("sign column");
+        assert!((sign.value(0) - 1.0).abs() < f64::EPSILON);
+        let log_abs =
+            batches[0].column(1).as_any().downcast_ref::<Float64Array>().expect("log_abs column");
+        assert!((log_abs.value(0) - 3.5).abs() < f64::EPSILON);
     }
 
     #[test]

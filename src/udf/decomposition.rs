@@ -12,20 +12,21 @@ use datafusion::logical_expr::{
 use nabled::core::prelude::NabledReal;
 use ndarray::{Array2, Array3, Axis};
 use ndarrow::NdarrowElement;
+use num_complex::{Complex, Complex64};
 
 use super::common::{
     complex_fixed_shape_tensor_array_from_flat_rows, complex_fixed_shape_tensor_view3,
-    expect_fixed_size_list_arg, expect_real_scalar_arg, expect_real_scalar_argument,
-    expect_usize_scalar_arg, expect_usize_scalar_argument, fixed_shape_tensor_view3,
-    fixed_size_list_array_from_flat_rows, fixed_size_list_view2, nullable_or,
-    primitive_array_from_values,
+    complex_fixed_size_list_array_from_flat_rows, expect_fixed_size_list_arg,
+    expect_real_scalar_arg, expect_real_scalar_argument, expect_usize_scalar_arg,
+    expect_usize_scalar_argument, fixed_shape_tensor_view3, fixed_size_list_array_from_flat_rows,
+    fixed_size_list_view2, nullable_or, primitive_array_from_values,
 };
 use super::docs::decomposition_doc;
 use crate::error::exec_error;
 use crate::metadata::{
-    complex_fixed_shape_tensor_field, fixed_shape_tensor_field, parse_complex_matrix_batch_field,
-    parse_matrix_batch_field, parse_vector_field, scalar_field, struct_field,
-    variable_shape_tensor_field, vector_field,
+    complex_fixed_shape_tensor_field, complex_vector_field, fixed_shape_tensor_field,
+    parse_complex_matrix_batch_field, parse_matrix_batch_field, parse_vector_field, scalar_field,
+    struct_field, variable_shape_tensor_field, vector_field,
 };
 use crate::signatures::{
     ScalarCoercion, any_signature, coerce_scalar_arguments, named_user_defined_signature,
@@ -208,6 +209,44 @@ fn complex_double_tensor_struct_field(
     let first = complex_fixed_shape_tensor_field(first_name, &shape, false)?;
     let second = complex_fixed_shape_tensor_field(second_name, &shape, false)?;
     Ok(struct_field(name, vec![first.as_ref().clone(), second.as_ref().clone()], nullable))
+}
+
+fn complex_eigen_struct_field(name: &str, dimension: usize, nullable: bool) -> Result<FieldRef> {
+    let eigenvalues = complex_vector_field("eigenvalues", dimension, false)?;
+    let schur_vectors =
+        complex_fixed_shape_tensor_field("schur_vectors", &[dimension, dimension], false)?;
+    Ok(struct_field(
+        name,
+        vec![eigenvalues.as_ref().clone(), schur_vectors.as_ref().clone()],
+        nullable,
+    ))
+}
+
+fn real_input_complex_bi_eigen_struct_field(
+    name: &str,
+    value_type: &DataType,
+    dimension: usize,
+    nullable: bool,
+) -> Result<FieldRef> {
+    let eigenvalues = complex_vector_field("eigenvalues", dimension, false)?;
+    let right_eigenvectors =
+        complex_fixed_shape_tensor_field("right_eigenvectors", &[dimension, dimension], false)?;
+    let left_eigenvectors =
+        complex_fixed_shape_tensor_field("left_eigenvectors", &[dimension, dimension], false)?;
+    let balancing_diagonal = vector_field("balancing_diagonal", value_type, dimension, false)?;
+    let balanced_matrix =
+        fixed_shape_tensor_field("balanced_matrix", value_type, &[dimension, dimension], false)?;
+    Ok(struct_field(
+        name,
+        vec![
+            eigenvalues.as_ref().clone(),
+            right_eigenvectors.as_ref().clone(),
+            left_eigenvectors.as_ref().clone(),
+            balancing_diagonal.as_ref().clone(),
+            balanced_matrix.as_ref().clone(),
+        ],
+        nullable,
+    ))
 }
 
 fn tensor_vector_struct_field(
@@ -616,11 +655,8 @@ fn invoke_complex_matrix_double_tensor_struct_output<E>(
     second_name: &str,
     shape: [usize; 2],
     op: impl Fn(
-        &ndarray::ArrayView2<'_, num_complex::Complex64>,
-    ) -> std::result::Result<
-        (Array2<num_complex::Complex64>, Array2<num_complex::Complex64>),
-        E,
-    >,
+        &ndarray::ArrayView2<'_, Complex64>,
+    ) -> std::result::Result<(Array2<Complex64>, Array2<Complex64>), E>,
 ) -> Result<ColumnarValue>
 where
     E: std::fmt::Display,
@@ -644,6 +680,180 @@ where
     Ok(ColumnarValue::Array(Arc::new(StructArray::new(
         vec![first_field, second_field].into(),
         vec![Arc::new(first_array), Arc::new(second_array)],
+        None,
+    ))))
+}
+
+fn invoke_complex_matrix_eigen_struct_output<E>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    dimension: usize,
+    op: impl Fn(
+        &ndarray::ArrayView2<'_, Complex64>,
+    )
+        -> std::result::Result<nabled::linalg::eigen::NdarrayNonsymmetricEigenResult<f64>, E>,
+) -> Result<ColumnarValue>
+where
+    E: std::fmt::Display,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view =
+        complex_fixed_shape_tensor_view3(&args.arg_fields[0], matrices, function_name)?;
+    let batch = matrix_view.len_of(Axis(0));
+    let mut eigenvalue_values = Vec::with_capacity(batch * dimension);
+    let mut schur_vector_values = Vec::with_capacity(batch * dimension * dimension);
+    for row in 0..batch {
+        let result = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
+        eigenvalue_values.extend(result.eigenvalues.iter().copied());
+        schur_vector_values.extend(result.schur_vectors.iter().copied());
+    }
+    let eigenvalues = complex_fixed_size_list_array_from_flat_rows(
+        function_name,
+        batch,
+        dimension,
+        eigenvalue_values,
+    )?;
+    let eigenvalue_field = complex_vector_field("eigenvalues", dimension, false)?;
+    let (schur_vector_field, schur_vector_array) = complex_fixed_shape_tensor_array_from_flat_rows(
+        "schur_vectors",
+        batch,
+        &[dimension, dimension],
+        schur_vector_values,
+    )?;
+    Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+        vec![eigenvalue_field, Arc::new(schur_vector_field)].into(),
+        vec![Arc::new(eigenvalues), Arc::new(schur_vector_array)],
+        None,
+    ))))
+}
+
+fn to_complex64<T>(value: Complex<T>) -> Complex64
+where
+    T: Into<f64> + Copy,
+{
+    Complex64::new(value.re.into(), value.im.into())
+}
+
+fn invoke_real_matrix_complex_eigen_struct_output<T, E>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    dimension: usize,
+    op: impl Fn(
+        &ndarray::ArrayView2<'_, T::Native>,
+    ) -> std::result::Result<
+        nabled::linalg::eigen::NdarrayNonsymmetricEigenResult<T::Native>,
+        E,
+    >,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + Into<f64>,
+    E: std::fmt::Display,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view = fixed_shape_tensor_view3::<T>(&args.arg_fields[0], matrices, function_name)?;
+    let batch = matrix_view.len_of(Axis(0));
+    let mut eigenvalue_values = Vec::with_capacity(batch * dimension);
+    let mut schur_vector_values = Vec::with_capacity(batch * dimension * dimension);
+    for row in 0..batch {
+        let result = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
+        eigenvalue_values.extend(result.eigenvalues.iter().copied().map(to_complex64));
+        schur_vector_values.extend(result.schur_vectors.iter().copied().map(to_complex64));
+    }
+    let eigenvalues = complex_fixed_size_list_array_from_flat_rows(
+        function_name,
+        batch,
+        dimension,
+        eigenvalue_values,
+    )?;
+    let eigenvalue_field = complex_vector_field("eigenvalues", dimension, false)?;
+    let (schur_vector_field, schur_vector_array) = complex_fixed_shape_tensor_array_from_flat_rows(
+        "schur_vectors",
+        batch,
+        &[dimension, dimension],
+        schur_vector_values,
+    )?;
+    Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+        vec![eigenvalue_field, Arc::new(schur_vector_field)].into(),
+        vec![Arc::new(eigenvalues), Arc::new(schur_vector_array)],
+        None,
+    ))))
+}
+
+fn invoke_real_matrix_complex_bi_eigen_struct_output<T, E>(
+    args: &ScalarFunctionArgs,
+    function_name: &str,
+    rows: usize,
+    cols: usize,
+    op: impl Fn(
+        &ndarray::ArrayView2<'_, T::Native>,
+    ) -> std::result::Result<
+        nabled::linalg::eigen::NdarrayNonsymmetricBiEigenResult<T::Native>,
+        E,
+    >,
+) -> Result<ColumnarValue>
+where
+    T: ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + Into<f64>,
+    E: std::fmt::Display,
+{
+    let matrices = expect_fixed_size_list_arg(args, 1, function_name)?;
+    let matrix_view = fixed_shape_tensor_view3::<T>(&args.arg_fields[0], matrices, function_name)?;
+    let batch = matrix_view.len_of(Axis(0));
+    let mut eigenvalue_values = Vec::with_capacity(batch * rows);
+    let mut right_values = Vec::with_capacity(batch * rows * cols);
+    let mut left_values = Vec::with_capacity(batch * rows * cols);
+    let mut diagonal_values = Vec::with_capacity(batch * rows);
+    let mut balanced_values = Vec::with_capacity(batch * rows * cols);
+    for row in 0..batch {
+        let result = op(&matrix_view.index_axis(Axis(0), row))
+            .map_err(|error| exec_error(function_name, error))?;
+        eigenvalue_values.extend(result.eigenvalues.iter().copied().map(to_complex64));
+        right_values.extend(result.right_eigenvectors.iter().copied().map(to_complex64));
+        left_values.extend(result.left_eigenvectors.iter().copied().map(to_complex64));
+        diagonal_values.extend(result.balancing_diagonal.iter().copied());
+        balanced_values.extend(result.balanced_matrix.iter().copied());
+    }
+    let eigenvalues = complex_fixed_size_list_array_from_flat_rows(
+        function_name,
+        batch,
+        rows,
+        eigenvalue_values,
+    )?;
+    let right = complex_fixed_shape_tensor_array_from_flat_rows(
+        "right_eigenvectors",
+        batch,
+        &[rows, cols],
+        right_values,
+    )?;
+    let left = complex_fixed_shape_tensor_array_from_flat_rows(
+        "left_eigenvectors",
+        batch,
+        &[rows, cols],
+        left_values,
+    )?;
+    let diagonal =
+        fixed_size_list_array_from_flat_rows::<T>(function_name, batch, rows, &diagonal_values)?;
+    let (balanced_field, balanced_array) =
+        tensor_column("balanced_matrix", [batch, rows, cols], balanced_values)?;
+    Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+        vec![
+            complex_vector_field("eigenvalues", rows, false)?,
+            Arc::new(right.0),
+            Arc::new(left.0),
+            vector_field("balancing_diagonal", &T::DATA_TYPE, rows, false)?,
+            balanced_field,
+        ]
+        .into(),
+        vec![
+            Arc::new(eigenvalues),
+            Arc::new(right.1),
+            Arc::new(left.1),
+            Arc::new(diagonal),
+            balanced_array,
+        ],
         None,
     ))))
 }
@@ -2355,6 +2565,228 @@ impl ScalarUDFImpl for MatrixBalanceNonsymmetric {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixEigenNonsymmetric {
+    signature: Signature,
+}
+
+impl MatrixEigenNonsymmetric {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixEigenNonsymmetric {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_eigen_nonsymmetric" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let (_value_type, dimension, _cols, nullable) = square_matrix_shape(&args, self.name())?;
+        complex_eigen_struct_field(self.name(), dimension, nullable)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        match matrix.value_type {
+            DataType::Float32 => invoke_real_matrix_complex_eigen_struct_output::<Float32Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                nabled::linalg::eigen::nonsymmetric_view,
+            ),
+            DataType::Float64 => invoke_real_matrix_complex_eigen_struct_output::<Float64Type, _>(
+                &args,
+                self.name(),
+                matrix.rows,
+                nabled::linalg::eigen::nonsymmetric_view,
+            ),
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            decomposition_doc(
+                "Compute a non-symmetric eigen decomposition for each real square matrix in the \
+                 batch.",
+                "matrix_eigen_nonsymmetric(matrix_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Square dense matrix batch in canonical fixed-shape tensor form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixEigenNonsymmetricBi {
+    signature: Signature,
+}
+
+impl MatrixEigenNonsymmetricBi {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixEigenNonsymmetricBi {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_eigen_nonsymmetric_bi" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let (value_type, dimension, _cols, nullable) = square_matrix_shape(&args, self.name())?;
+        real_input_complex_bi_eigen_struct_field(self.name(), &value_type, dimension, nullable)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        match matrix.value_type {
+            DataType::Float32 => {
+                invoke_real_matrix_complex_bi_eigen_struct_output::<Float32Type, _>(
+                    &args,
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols,
+                    |view| {
+                        let config =
+                            nabled::linalg::eigen::NonsymmetricEigenConfig::<f32>::default();
+                        nabled::linalg::eigen::nonsymmetric_bi_view(view, &config)
+                    },
+                )
+            }
+            DataType::Float64 => {
+                invoke_real_matrix_complex_bi_eigen_struct_output::<Float64Type, _>(
+                    &args,
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols,
+                    |view| {
+                        let config =
+                            nabled::linalg::eigen::NonsymmetricEigenConfig::<f64>::default();
+                        nabled::linalg::eigen::nonsymmetric_bi_view(view, &config)
+                    },
+                )
+            }
+            actual => {
+                Err(exec_error(self.name(), format!("unsupported matrix value type {actual}")))
+            }
+        }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            decomposition_doc(
+                "Compute matched left and right non-symmetric eigenvectors for each real square \
+                 matrix in the batch.",
+                "matrix_eigen_nonsymmetric_bi(matrix_batch)",
+            )
+            .with_argument(
+                "matrix_batch",
+                "Square dense matrix batch in canonical fixed-shape tensor form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatrixEigenNonsymmetricComplex {
+    signature: Signature,
+}
+
+impl MatrixEigenNonsymmetricComplex {
+    fn new() -> Self { Self { signature: any_signature(1) } }
+}
+
+impl ScalarUDFImpl for MatrixEigenNonsymmetricComplex {
+    fn as_any(&self) -> &dyn Any { self }
+
+    fn name(&self) -> &'static str { "matrix_eigen_nonsymmetric_complex" }
+
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion::common::internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        let (dimension, nullable) = complex_square_matrix_shape(&args, self.name())?;
+        complex_eigen_struct_field(self.name(), dimension, nullable)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let matrix = parse_complex_matrix_batch_field(&args.arg_fields[0], self.name(), 1)?;
+        if matrix.rows != matrix.cols {
+            return Err(exec_error(
+                self.name(),
+                format!(
+                    "{} requires square matrices, found ({}, {})",
+                    self.name(),
+                    matrix.rows,
+                    matrix.cols
+                ),
+            ));
+        }
+        invoke_complex_matrix_eigen_struct_output(&args, self.name(), matrix.rows, |view| {
+            nabled::linalg::eigen::nonsymmetric_complex_view(view)
+        })
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+            decomposition_doc(
+                "Compute a complex non-symmetric eigen decomposition for each complex square \
+                 matrix in the batch.",
+                "matrix_eigen_nonsymmetric_complex(matrix_batch)",
+            )
+            .with_argument(
+                "matrix",
+                "Complex square matrix batch in canonical arrow.fixed_shape_tensor form.",
+            )
+            .build()
+        });
+        Some(&DOCUMENTATION)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct MatrixSchur {
     signature: Signature,
 }
@@ -2858,6 +3290,21 @@ pub fn matrix_eigen_generalized_udf() -> Arc<ScalarUDF> {
 #[must_use]
 pub fn matrix_balance_nonsymmetric_udf() -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(MatrixBalanceNonsymmetric::new()))
+}
+
+#[must_use]
+pub fn matrix_eigen_nonsymmetric_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixEigenNonsymmetric::new()))
+}
+
+#[must_use]
+pub fn matrix_eigen_nonsymmetric_bi_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixEigenNonsymmetricBi::new()))
+}
+
+#[must_use]
+pub fn matrix_eigen_nonsymmetric_complex_udf() -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(MatrixEigenNonsymmetricComplex::new()))
 }
 
 #[must_use]

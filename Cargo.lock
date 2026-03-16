@@ -2528,12 +2528,14 @@ name = "ndatafusion"
 version = "0.0.1"
 dependencies = [
  "arrow-schema",
+ "async-trait",
  "datafusion",
  "nabled",
  "ndarray",
  "ndarray-linalg",
  "ndarrow",
  "num-complex",
+ "num-traits",
  "serde",
  "serde_json",
  "tokio",

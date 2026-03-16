@@ -10,7 +10,9 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::ScalarValue;
 use datafusion::common::utils::arrays_into_list_array;
 use datafusion::logical_expr::ColumnarValue;
+use nabled::core::prelude::NabledReal;
 use ndarray::{Array1, Array2, Array3, Array4, Axis, Ix1, Ix2, Ix3, Ix4};
+use ndarrow::NdarrowElement;
 use num_complex::Complex64;
 
 use crate::metadata::{complex_vector_field, vector_field};
@@ -20,6 +22,11 @@ use crate::udfs;
 fn assert_close(actual: f64, expected: f64) {
     let delta = (actual - expected).abs();
     assert!(delta < 1.0e-9, "expected {expected}, got {actual}, delta {delta}");
+}
+
+fn assert_close_eps(actual: f64, expected: f64, epsilon: f64) {
+    let delta = (actual - expected).abs();
+    assert!(delta < epsilon, "expected {expected}, got {actual}, delta {delta}, epsilon {epsilon}");
 }
 
 fn assert_complex_close(actual: Complex64, expected: Complex64) {
@@ -345,6 +352,17 @@ fn fixed_shape_viewd<'a>(
     .expect("fixed-shape tensor")
 }
 
+fn fixed_shape_viewd_f32<'a>(
+    field: &'a FieldRef,
+    values: &'a ColumnarValue,
+) -> ndarray::ArrayViewD<'a, f32> {
+    ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+        field.as_ref(),
+        fixed_size_list_array(values),
+    )
+    .expect("fixed-shape tensor")
+}
+
 fn complex_fixed_shape_view3<'a>(
     field: &'a FieldRef,
     values: &'a ColumnarValue,
@@ -376,11 +394,26 @@ fn fixed_shape_view4<'a>(
     fixed_shape_viewd(field, values).into_dimensionality::<Ix4>().expect("rank-4 tensor")
 }
 
+fn fixed_shape_view4_f32<'a>(
+    field: &'a FieldRef,
+    values: &'a ColumnarValue,
+) -> ndarray::ArrayView4<'a, f32> {
+    fixed_shape_viewd_f32(field, values).into_dimensionality::<Ix4>().expect("rank-4 tensor")
+}
+
 fn variable_shape_rows<'a>(
     field: &'a FieldRef,
     values: &'a ColumnarValue,
 ) -> ndarrow::VariableShapeTensorIter<'a, Float64Type> {
     ndarrow::variable_shape_tensor_iter::<Float64Type>(field.as_ref(), struct_array(values))
+        .expect("variable-shape tensor")
+}
+
+fn variable_shape_rows_f32<'a>(
+    field: &'a FieldRef,
+    values: &'a ColumnarValue,
+) -> ndarrow::VariableShapeTensorIter<'a, Float32Type> {
+    ndarrow::variable_shape_tensor_iter::<Float32Type>(field.as_ref(), struct_array(values))
         .expect("variable-shape tensor")
 }
 
@@ -1211,6 +1244,210 @@ fn assert_complex_two_tensor_struct_output<E>(
     }
 }
 
+fn assert_complex_eigen_struct_output<E>(
+    output_field: &FieldRef,
+    output: &ColumnarValue,
+    matrix_view: &ndarray::ArrayView3<'_, Complex64>,
+    op: impl Fn(
+        &ndarray::ArrayView2<'_, Complex64>,
+    ) -> StdResult<nabled::linalg::eigen::NdarrayNonsymmetricEigenResult<f64>, E>,
+) where
+    E: std::fmt::Display,
+{
+    let DataType::Struct(fields) = output_field.data_type() else {
+        panic!("expected struct output");
+    };
+    let output = struct_array(output);
+    let eigenvalues = ndarrow::complex64_as_array_view2(
+        output
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("complex eigenvalue vectors"),
+    )
+    .expect("complex eigenvalue vectors");
+    let schur_vectors = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(
+        &fields[1],
+        output
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("complex schur vectors"),
+    )
+    .expect("complex schur vectors")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 complex schur vectors");
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let expected = op(&matrix_view.index_axis(Axis(0), row))
+            .unwrap_or_else(|error| panic!("expected output: {error}"));
+        for index in 0..expected.eigenvalues.len() {
+            assert_complex_close(eigenvalues[[row, index]], expected.eigenvalues[index]);
+        }
+        for i in 0..expected.schur_vectors.nrows() {
+            for j in 0..expected.schur_vectors.ncols() {
+                assert_complex_close(schur_vectors[[row, i, j]], expected.schur_vectors[[i, j]]);
+            }
+        }
+    }
+}
+
+fn assert_real_input_complex_eigen_struct_output<T, E>(
+    output_field: &FieldRef,
+    output: &ColumnarValue,
+    matrix_view: &ndarray::ArrayView3<'_, T::Native>,
+    op: impl Fn(
+        &ndarray::ArrayView2<'_, T::Native>,
+    ) -> StdResult<nabled::linalg::eigen::NdarrayNonsymmetricEigenResult<T::Native>, E>,
+) where
+    T: datafusion::arrow::array::types::ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + Into<f64>,
+    E: std::fmt::Display,
+{
+    let DataType::Struct(fields) = output_field.data_type() else {
+        panic!("expected struct output");
+    };
+    let output = struct_array(output);
+    let eigenvalues = ndarrow::complex64_as_array_view2(
+        output
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("complex eigenvalue vectors"),
+    )
+    .expect("complex eigenvalue vectors");
+    let schur_vectors = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(
+        &fields[1],
+        output
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("complex schur vectors"),
+    )
+    .expect("complex schur vectors")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 complex schur vectors");
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let expected = op(&matrix_view.index_axis(Axis(0), row))
+            .unwrap_or_else(|error| panic!("expected output: {error}"));
+        for index in 0..expected.eigenvalues.len() {
+            assert_complex_close(
+                eigenvalues[[row, index]],
+                Complex64::new(
+                    expected.eigenvalues[index].re.into(),
+                    expected.eigenvalues[index].im.into(),
+                ),
+            );
+        }
+        for i in 0..expected.schur_vectors.nrows() {
+            for j in 0..expected.schur_vectors.ncols() {
+                assert_complex_close(
+                    schur_vectors[[row, i, j]],
+                    Complex64::new(
+                        expected.schur_vectors[[i, j]].re.into(),
+                        expected.schur_vectors[[i, j]].im.into(),
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn assert_real_input_complex_bi_eigen_struct_output<T, E>(
+    output_field: &FieldRef,
+    output: &ColumnarValue,
+    matrix_view: &ndarray::ArrayView3<'_, T::Native>,
+    op: impl Fn(
+        &ndarray::ArrayView2<'_, T::Native>,
+    ) -> StdResult<nabled::linalg::eigen::NdarrayNonsymmetricBiEigenResult<T::Native>, E>,
+) where
+    T: datafusion::arrow::array::types::ArrowPrimitiveType,
+    T::Native: NabledReal + NdarrowElement + Into<f64>,
+    E: std::fmt::Display,
+{
+    let DataType::Struct(fields) = output_field.data_type() else {
+        panic!("expected struct output");
+    };
+    let output = struct_array(output);
+    let eigenvalues = ndarrow::complex64_as_array_view2(
+        output
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("complex eigenvalue vectors"),
+    )
+    .expect("complex eigenvalue vectors");
+    let right = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(
+        &fields[1],
+        output
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("complex right eigenvectors"),
+    )
+    .expect("complex right eigenvectors")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 complex right eigenvectors");
+    let left = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(
+        &fields[2],
+        output
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("complex left eigenvectors"),
+    )
+    .expect("complex left eigenvectors")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 complex left eigenvectors");
+    let diagonal = ndarrow::fixed_size_list_as_array2::<T>(
+        output
+            .column(3)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("balancing diagonal"),
+    )
+    .expect("balancing diagonal");
+    let balanced = ndarrow::fixed_shape_tensor_as_array_viewd::<T>(
+        &fields[4],
+        output.column(4).as_any().downcast_ref::<FixedSizeListArray>().expect("balanced matrix"),
+    )
+    .expect("balanced matrix")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 balanced matrix");
+    for row in 0..matrix_view.len_of(Axis(0)) {
+        let expected = op(&matrix_view.index_axis(Axis(0), row))
+            .unwrap_or_else(|error| panic!("expected output: {error}"));
+        for index in 0..expected.eigenvalues.len() {
+            assert_complex_close(
+                eigenvalues[[row, index]],
+                Complex64::new(
+                    expected.eigenvalues[index].re.into(),
+                    expected.eigenvalues[index].im.into(),
+                ),
+            );
+            assert_close(diagonal[[row, index]].into(), expected.balancing_diagonal[index].into());
+        }
+        for i in 0..expected.right_eigenvectors.nrows() {
+            for j in 0..expected.right_eigenvectors.ncols() {
+                assert_complex_close(
+                    right[[row, i, j]],
+                    Complex64::new(
+                        expected.right_eigenvectors[[i, j]].re.into(),
+                        expected.right_eigenvectors[[i, j]].im.into(),
+                    ),
+                );
+                assert_complex_close(
+                    left[[row, i, j]],
+                    Complex64::new(
+                        expected.left_eigenvectors[[i, j]].re.into(),
+                        expected.left_eigenvectors[[i, j]].im.into(),
+                    ),
+                );
+                assert_close(balanced[[row, i, j]].into(), expected.balanced_matrix[[i, j]].into());
+            }
+        }
+    }
+}
+
 #[test]
 fn complex_matrix_udfs_cover_products_and_stats() {
     let (matrix_field, matrices) = complex_matrix_batch("complex_matrices", [
@@ -1286,6 +1523,87 @@ fn complex_decomposition_udfs_cover_schur_and_polar() {
     assert_complex_two_tensor_struct_output(&polar_field, &polar, &matrix_view, |view| {
         nabled::linalg::polar::compute_polar_complex_view(view).map(|result| (result.u, result.p))
     });
+}
+
+#[test]
+fn complex_eigen_udf_covers_nonsymmetric_contract() {
+    let (matrix_field, matrices) = complex_matrix_batch("complex_nonsymmetric_spectral", [
+        [[Complex64::new(1.0, 0.0), Complex64::new(2.0, 1.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, 0.0),
+        ]],
+        [[Complex64::new(2.0, 0.0), Complex64::new(0.0, -1.0)], [
+            Complex64::new(0.0, 0.0),
+            Complex64::new(5.0, 0.0),
+        ]],
+    ]);
+    let matrix_view = complex_matrix_view(&matrix_field, &matrices);
+
+    let (output_field, output) = invoke_udf(
+        &udfs::matrix_eigen_nonsymmetric_complex_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices.clone()))],
+        vec![Arc::clone(&matrix_field)],
+        &[None],
+        2,
+    )
+    .expect("matrix_eigen_nonsymmetric_complex");
+    assert_complex_eigen_struct_output(&output_field, &output, &matrix_view, |view| {
+        nabled::linalg::eigen::nonsymmetric_complex_view(view)
+    });
+}
+
+#[test]
+fn real_nonsymmetric_eigen_udfs_cover_complex_contracts() {
+    let (matrix_field_f32, matrices_f32) =
+        matrix_batch_f32("real_nonsymmetric_f32", [[[1.0_f32, 2.0_f32], [0.0_f32, 3.0_f32]]]);
+    let matrix_view_f32 = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+        matrix_field_f32.as_ref(),
+        &matrices_f32,
+    )
+    .expect("f32 matrix view")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 f32 matrix batch");
+    let (field_f32, output_f32) = invoke_udf(
+        &udfs::matrix_eigen_nonsymmetric_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices_f32.clone()))],
+        vec![Arc::clone(&matrix_field_f32)],
+        &[None],
+        1,
+    )
+    .expect("matrix_eigen_nonsymmetric");
+    assert_real_input_complex_eigen_struct_output::<Float32Type, _>(
+        &field_f32,
+        &output_f32,
+        &matrix_view_f32,
+        nabled::linalg::eigen::nonsymmetric_view,
+    );
+
+    let (matrix_field_f64, matrices_f64) =
+        matrix_batch("real_nonsymmetric_f64", [[[2.0_f64, -1.0_f64], [1.0_f64, 4.0_f64]]]);
+    let matrix_view_f64 = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(
+        matrix_field_f64.as_ref(),
+        &matrices_f64,
+    )
+    .expect("f64 matrix view")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 f64 matrix batch");
+    let (field_f64, output_f64) = invoke_udf(
+        &udfs::matrix_eigen_nonsymmetric_bi_udf(),
+        vec![ColumnarValue::Array(Arc::new(matrices_f64.clone()))],
+        vec![Arc::clone(&matrix_field_f64)],
+        &[None],
+        1,
+    )
+    .expect("matrix_eigen_nonsymmetric_bi");
+    assert_real_input_complex_bi_eigen_struct_output::<Float64Type, _>(
+        &field_f64,
+        &output_f64,
+        &matrix_view_f64,
+        |view| {
+            let config = nabled::linalg::eigen::NonsymmetricEigenConfig::<f64>::default();
+            nabled::linalg::eigen::nonsymmetric_bi_view(view, &config)
+        },
+    );
 }
 
 #[test]
@@ -2473,6 +2791,301 @@ fn matrix_spectral_udfs_validate_square_and_pair_contracts() {
         1,
     );
     assert!(shape_error.contains("matrix shape mismatch"));
+}
+
+#[test]
+fn matrix_solve_sylvester_udf_covers_f32_contract() {
+    let (left_f32_field, left_f32) = matrix_batch_f32("left_f32", [[[1.0, 0.0], [0.0, 2.0]]]);
+    let (right_f32_field, right_f32) = matrix_batch_f32("right_f32", [[[3.0, 0.0], [0.0, 4.0]]]);
+    let (constant_f32_field, constant_f32) =
+        matrix_batch_f32("constant_f32", [[[5.0, 6.0], [7.0, 8.0]]]);
+    let (sylvester_f32_field, sylvester_f32_output) = invoke_udf(
+        &udfs::matrix_solve_sylvester_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left_f32.clone())),
+            ColumnarValue::Array(Arc::new(right_f32.clone())),
+            ColumnarValue::Array(Arc::new(constant_f32.clone())),
+        ],
+        vec![
+            Arc::clone(&left_f32_field),
+            Arc::clone(&right_f32_field),
+            Arc::clone(&constant_f32_field),
+        ],
+        &[None, None, None],
+        1,
+    )
+    .expect("matrix_solve_sylvester f32");
+    let sylvester_f32 = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+        sylvester_f32_field.as_ref(),
+        fixed_size_list_array(&sylvester_f32_output),
+    )
+    .expect("sylvester f32 output")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 sylvester f32 output");
+    let left_f32_view = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+        left_f32_field.as_ref(),
+        &left_f32,
+    )
+    .expect("left f32")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 left f32");
+    let right_f32_view = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+        right_f32_field.as_ref(),
+        &right_f32,
+    )
+    .expect("right f32")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 right f32");
+    let constant_f32_view = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+        constant_f32_field.as_ref(),
+        &constant_f32,
+    )
+    .expect("constant f32")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 constant f32");
+    let expected_f32 = nabled::linalg::sylvester::solve_sylvester_view(
+        &left_f32_view.index_axis(Axis(0), 0),
+        &right_f32_view.index_axis(Axis(0), 0),
+        &constant_f32_view.index_axis(Axis(0), 0),
+    )
+    .expect("expected sylvester f32");
+    for i in 0..expected_f32.nrows() {
+        for j in 0..expected_f32.ncols() {
+            assert_close(f64::from(sylvester_f32[[0, i, j]]), f64::from(expected_f32[[i, j]]));
+        }
+    }
+}
+
+#[test]
+fn matrix_solve_sylvester_mixed_f64_udf_covers_struct_output() {
+    let (left_f64_field, left_f64) = matrix_batch("left_f64", [[[1.0, 0.0], [0.0, 2.0]]]);
+    let (right_f64_field, right_f64) = matrix_batch("right_f64", [[[3.0, 0.0], [0.0, 4.0]]]);
+    let (constant_f64_field, constant_f64) =
+        matrix_batch("constant_f64", [[[5.0, 6.0], [7.0, 8.0]]]);
+    let mixed_f64_result = invoke_udf(
+        &udfs::matrix_solve_sylvester_mixed_f64_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left_f64.clone())),
+            ColumnarValue::Array(Arc::new(right_f64.clone())),
+            ColumnarValue::Array(Arc::new(constant_f64.clone())),
+        ],
+        vec![
+            Arc::clone(&left_f64_field),
+            Arc::clone(&right_f64_field),
+            Arc::clone(&constant_f64_field),
+        ],
+        &[None, None, None],
+        1,
+    );
+    if !cfg!(feature = "magma-system") {
+        let error = mixed_f64_result.expect_err("mixed f64 should require magma-system");
+        assert!(error.to_string().contains("magma-system"));
+        return;
+    }
+    let (mixed_f64_field, mixed_f64_output) =
+        mixed_f64_result.expect("matrix_solve_sylvester_mixed_f64");
+    let DataType::Struct(mixed_f64_fields) = mixed_f64_field.data_type() else {
+        panic!("expected mixed f64 struct output");
+    };
+    let mixed_f64_output = struct_array(&mixed_f64_output);
+    let mixed_f64_solution = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(
+        &mixed_f64_fields[0],
+        mixed_f64_output
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("mixed f64 solution"),
+    )
+    .expect("mixed f64 solution")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 mixed f64 solution");
+    let left_f64_view = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(
+        left_f64_field.as_ref(),
+        &left_f64,
+    )
+    .expect("left f64")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 left f64");
+    let right_f64_view = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(
+        right_f64_field.as_ref(),
+        &right_f64,
+    )
+    .expect("right f64")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 right f64");
+    let constant_f64_view = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(
+        constant_f64_field.as_ref(),
+        &constant_f64,
+    )
+    .expect("constant f64")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 constant f64");
+    let expected_mixed_f64 = nabled::linalg::sylvester::solve_sylvester_mixed_f64_view(
+        &left_f64_view.index_axis(Axis(0), 0),
+        &right_f64_view.index_axis(Axis(0), 0),
+        &constant_f64_view.index_axis(Axis(0), 0),
+    )
+    .expect("expected mixed f64");
+    for i in 0..expected_mixed_f64.solution.nrows() {
+        for j in 0..expected_mixed_f64.solution.ncols() {
+            assert_close(mixed_f64_solution[[0, i, j]], expected_mixed_f64.solution[[i, j]]);
+        }
+    }
+}
+
+#[test]
+fn matrix_solve_sylvester_complex_udf_covers_complex_contract() {
+    let (left_complex_field, left_complex) = complex_matrix_batch("left_complex", [[
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(2.0, 0.0)],
+    ]]);
+    let (right_complex_field, right_complex) = complex_matrix_batch("right_complex", [[
+        [Complex64::new(3.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(4.0, 0.0)],
+    ]]);
+    let (constant_complex_field, constant_complex) = complex_matrix_batch("constant_complex", [[
+        [Complex64::new(5.0, 1.0), Complex64::new(6.0, 0.0)],
+        [Complex64::new(7.0, -1.0), Complex64::new(8.0, 0.0)],
+    ]]);
+    let (complex_field, complex_output) = invoke_udf(
+        &udfs::matrix_solve_sylvester_complex_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left_complex.clone())),
+            ColumnarValue::Array(Arc::new(right_complex.clone())),
+            ColumnarValue::Array(Arc::new(constant_complex.clone())),
+        ],
+        vec![
+            Arc::clone(&left_complex_field),
+            Arc::clone(&right_complex_field),
+            Arc::clone(&constant_complex_field),
+        ],
+        &[None, None, None],
+        1,
+    )
+    .expect("matrix_solve_sylvester_complex");
+    let complex_solution = complex_fixed_shape_view3(&complex_field, &complex_output);
+    let left_complex_view = complex_matrix_view(&left_complex_field, &left_complex);
+    let right_complex_view = complex_matrix_view(&right_complex_field, &right_complex);
+    let constant_complex_view = complex_matrix_view(&constant_complex_field, &constant_complex);
+    let expected_complex = nabled::linalg::sylvester::solve_sylvester_complex_view(
+        &left_complex_view.index_axis(Axis(0), 0),
+        &right_complex_view.index_axis(Axis(0), 0),
+        &constant_complex_view.index_axis(Axis(0), 0),
+    )
+    .expect("expected complex sylvester");
+    for i in 0..expected_complex.nrows() {
+        for j in 0..expected_complex.ncols() {
+            assert_complex_close(complex_solution[[0, i, j]], expected_complex[[i, j]]);
+        }
+    }
+}
+
+#[test]
+fn matrix_solve_sylvester_mixed_complex_udf_covers_struct_output() {
+    let (left_complex_field, left_complex) = complex_matrix_batch("left_complex", [[
+        [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(2.0, 0.0)],
+    ]]);
+    let (right_complex_field, right_complex) = complex_matrix_batch("right_complex", [[
+        [Complex64::new(3.0, 0.0), Complex64::new(0.0, 0.0)],
+        [Complex64::new(0.0, 0.0), Complex64::new(4.0, 0.0)],
+    ]]);
+    let (constant_complex_field, constant_complex) = complex_matrix_batch("constant_complex", [[
+        [Complex64::new(5.0, 1.0), Complex64::new(6.0, 0.0)],
+        [Complex64::new(7.0, -1.0), Complex64::new(8.0, 0.0)],
+    ]]);
+    let left_complex_view = complex_matrix_view(&left_complex_field, &left_complex);
+    let right_complex_view = complex_matrix_view(&right_complex_field, &right_complex);
+    let constant_complex_view = complex_matrix_view(&constant_complex_field, &constant_complex);
+    let mixed_complex_result = invoke_udf(
+        &udfs::matrix_solve_sylvester_mixed_complex_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left_complex.clone())),
+            ColumnarValue::Array(Arc::new(right_complex.clone())),
+            ColumnarValue::Array(Arc::new(constant_complex.clone())),
+        ],
+        vec![
+            Arc::clone(&left_complex_field),
+            Arc::clone(&right_complex_field),
+            Arc::clone(&constant_complex_field),
+        ],
+        &[None, None, None],
+        1,
+    );
+    if !cfg!(feature = "magma-system") {
+        let error = mixed_complex_result.expect_err("mixed complex should require magma-system");
+        assert!(error.to_string().contains("magma-system"));
+        return;
+    }
+    let (mixed_complex_field, mixed_complex_output) =
+        mixed_complex_result.expect("matrix_solve_sylvester_mixed_complex");
+    let DataType::Struct(mixed_complex_fields) = mixed_complex_field.data_type() else {
+        panic!("expected mixed complex struct output");
+    };
+    let mixed_complex_output = struct_array(&mixed_complex_output);
+    let mixed_complex_solution = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(
+        &mixed_complex_fields[0],
+        mixed_complex_output
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("mixed complex solution"),
+    )
+    .expect("mixed complex solution")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 mixed complex solution");
+    let expected_mixed_complex = nabled::linalg::sylvester::solve_sylvester_mixed_complex_view(
+        &left_complex_view.index_axis(Axis(0), 0),
+        &right_complex_view.index_axis(Axis(0), 0),
+        &constant_complex_view.index_axis(Axis(0), 0),
+    )
+    .expect("expected mixed complex");
+    for i in 0..expected_mixed_complex.solution.nrows() {
+        for j in 0..expected_mixed_complex.solution.ncols() {
+            assert_complex_close(
+                mixed_complex_solution[[0, i, j]],
+                expected_mixed_complex.solution[[i, j]],
+            );
+        }
+    }
+}
+
+#[test]
+fn matrix_sylvester_udfs_validate_contracts() {
+    let (left_field, left) = matrix_batch("left", [[[1.0, 0.0], [0.0, 2.0]]]);
+    let (right_field, right) = matrix_batch("right", [[[3.0, 0.0], [0.0, 4.0]]]);
+    let (bad_constant_field, bad_constant) =
+        matrix_batch("bad_constant", [[[5.0, 6.0, 7.0], [8.0, 9.0, 10.0]]]);
+    let shape_error = invoke_udf_error(
+        &udfs::matrix_solve_sylvester_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left.clone())),
+            ColumnarValue::Array(Arc::new(right.clone())),
+            ColumnarValue::Array(Arc::new(bad_constant)),
+        ],
+        vec![Arc::clone(&left_field), Arc::clone(&right_field), bad_constant_field],
+        &[None, None, None],
+        1,
+    );
+    assert!(shape_error.contains("constant matrix shape mismatch"));
+
+    let (left_f32_field, left_f32) = matrix_batch_f32("left_f32", [[[1.0_f32, 0.0], [0.0, 2.0]]]);
+    let (right_f32_field, right_f32) =
+        matrix_batch_f32("right_f32", [[[3.0_f32, 0.0], [0.0, 4.0]]]);
+    let (constant_f32_field, constant_f32) =
+        matrix_batch_f32("constant_f32", [[[5.0_f32, 6.0], [7.0, 8.0]]]);
+    let mixed_f64_error = invoke_udf_error(
+        &udfs::matrix_solve_sylvester_mixed_f64_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(left_f32)),
+            ColumnarValue::Array(Arc::new(right_f32)),
+            ColumnarValue::Array(Arc::new(constant_f32)),
+        ],
+        vec![left_f32_field, right_f32_field, constant_f32_field],
+        &[None, None, None],
+        1,
+    );
+    assert!(mixed_f64_error.contains("requires Float64 matrix inputs"));
 }
 
 #[test]
@@ -5025,4 +5638,1599 @@ fn ml_udfs_cover_float32_branches() {
     )
     .expect("linear_regression f32");
     assert_eq!(array_data_type(&regression_output), regression_field.data_type());
+}
+
+struct DifferentiationFixture {
+    function_field:   FieldRef,
+    step_field:       FieldRef,
+    tolerance_field:  FieldRef,
+    iterations_field: FieldRef,
+    vector_field_f64: FieldRef,
+    vector_field_f32: FieldRef,
+    vectors:          FixedSizeListArray,
+    vectors_f32:      FixedSizeListArray,
+    square:           ScalarValue,
+    sum_squares:      ScalarValue,
+    step:             ScalarValue,
+    step_f32:         ScalarValue,
+    tolerance:        ScalarValue,
+    iterations:       ScalarValue,
+}
+
+fn differentiation_fixture() -> DifferentiationFixture {
+    DifferentiationFixture {
+        function_field:   Arc::new(Field::new("function", DataType::Utf8, false)),
+        step_field:       Arc::new(Field::new("step_size", DataType::Float64, false)),
+        tolerance_field:  Arc::new(Field::new("tolerance", DataType::Float64, false)),
+        iterations_field: Arc::new(Field::new("max_iterations", DataType::Int64, false)),
+        vector_field_f64: vector_field("vector", &DataType::Float64, 2, false).expect("field"),
+        vector_field_f32: vector_field("vector_f32", &DataType::Float32, 2, false).expect("field"),
+        vectors:          fixed_size_list([[2.0, 3.0]]),
+        vectors_f32:      fixed_size_list_f32([[1.0_f32, 2.0]]),
+        square:           ScalarValue::Utf8(Some("square".to_string())),
+        sum_squares:      ScalarValue::Utf8(Some("sum_squares".to_string())),
+        step:             ScalarValue::Float64(Some(1.0e-6)),
+        step_f32:         ScalarValue::Float64(Some(1.0e-3)),
+        tolerance:        ScalarValue::Float64(Some(1.0e-8)),
+        iterations:       ScalarValue::Int64(Some(32)),
+    }
+}
+
+#[test]
+fn differentiation_udfs_produce_jacobians() {
+    let fixture = differentiation_fixture();
+    let (jacobian_field, jacobian_output) = invoke_udf(
+        &udfs::jacobian_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.square.clone()),
+            ColumnarValue::Array(Arc::new(fixture.vectors.clone())),
+            ColumnarValue::Scalar(fixture.step.clone()),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+            ColumnarValue::Scalar(fixture.iterations.clone()),
+        ],
+        vec![
+            Arc::clone(&fixture.function_field),
+            Arc::clone(&fixture.vector_field_f64),
+            Arc::clone(&fixture.step_field),
+            Arc::clone(&fixture.tolerance_field),
+            Arc::clone(&fixture.iterations_field),
+        ],
+        &[
+            Some(fixture.square.clone()),
+            None,
+            Some(fixture.step.clone()),
+            Some(fixture.tolerance.clone()),
+            Some(fixture.iterations.clone()),
+        ],
+        1,
+    )
+    .expect("jacobian");
+    let jacobian = fixed_shape_viewd(&jacobian_field, &jacobian_output)
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 jacobian");
+    assert!((jacobian[[0, 0, 0]] - 4.0).abs() < 1.0e-3);
+    assert!((jacobian[[0, 1, 1]] - 6.0).abs() < 1.0e-3);
+    assert!(jacobian[[0, 0, 1]].abs() < 1.0e-3);
+    assert!(jacobian[[0, 1, 0]].abs() < 1.0e-3);
+
+    let (central_field, central_output) = invoke_udf(
+        &udfs::jacobian_central_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.square.clone()),
+            ColumnarValue::Array(Arc::new(fixture.vectors)),
+            ColumnarValue::Scalar(fixture.step.clone()),
+        ],
+        vec![fixture.function_field, fixture.vector_field_f64, fixture.step_field],
+        &[Some(fixture.square), None, Some(fixture.step)],
+        1,
+    )
+    .expect("jacobian_central");
+    let central = fixed_shape_viewd(&central_field, &central_output)
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 central jacobian");
+    assert!((central[[0, 0, 0]] - 4.0).abs() < 1.0e-5);
+    assert!((central[[0, 1, 1]] - 6.0).abs() < 1.0e-5);
+}
+
+#[test]
+fn differentiation_udfs_produce_gradient_and_hessian() {
+    let fixture = differentiation_fixture();
+    let (gradient_field, gradient_output) = invoke_udf(
+        &udfs::gradient_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.sum_squares.clone()),
+            ColumnarValue::Array(Arc::new(fixture.vectors.clone())),
+            ColumnarValue::Scalar(fixture.step.clone()),
+        ],
+        vec![
+            Arc::clone(&fixture.function_field),
+            Arc::clone(&fixture.vector_field_f64),
+            Arc::clone(&fixture.step_field),
+        ],
+        &[Some(fixture.sum_squares.clone()), None, Some(fixture.step.clone())],
+        1,
+    )
+    .expect("gradient");
+    let gradient =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(fixed_size_list_array(&gradient_output))
+            .expect("gradient");
+    assert!(matches!(gradient_field.data_type(), DataType::FixedSizeList(_, _)));
+    assert_close_eps(gradient[[0, 0]], 4.0, 1.0e-5);
+    assert_close_eps(gradient[[0, 1]], 6.0, 1.0e-5);
+
+    let (hessian_field, hessian_output) = invoke_udf(
+        &udfs::hessian_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.sum_squares.clone()),
+            ColumnarValue::Array(Arc::new(fixture.vectors)),
+            ColumnarValue::Scalar(fixture.step.clone()),
+        ],
+        vec![fixture.function_field, fixture.vector_field_f64, fixture.step_field],
+        &[Some(fixture.sum_squares), None, Some(fixture.step)],
+        1,
+    )
+    .expect("hessian");
+    let hessian = fixed_shape_viewd(&hessian_field, &hessian_output)
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 hessian");
+    assert_close_eps(hessian[[0, 0, 0]], 2.0, 1.0e-3);
+    assert_close_eps(hessian[[0, 1, 1]], 2.0, 1.0e-3);
+    assert_close_eps(hessian[[0, 0, 1]], 0.0, 1.0e-3);
+    assert_close_eps(hessian[[0, 1, 0]], 0.0, 1.0e-3);
+}
+
+#[test]
+fn differentiation_udfs_support_float32_gradients() {
+    let fixture = differentiation_fixture();
+    let (gradient_field, gradient_output) = invoke_udf(
+        &udfs::gradient_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.sum_squares.clone()),
+            ColumnarValue::Array(Arc::new(fixture.vectors_f32)),
+            ColumnarValue::Scalar(fixture.step_f32.clone()),
+        ],
+        vec![fixture.function_field, fixture.vector_field_f32, fixture.step_field],
+        &[Some(fixture.sum_squares), None, Some(fixture.step_f32)],
+        1,
+    )
+    .expect("gradient f32");
+    assert_eq!(array_data_type(&gradient_output), gradient_field.data_type());
+    let gradient =
+        ndarrow::fixed_size_list_as_array2::<Float32Type>(fixed_size_list_array(&gradient_output))
+            .expect("gradient f32");
+    assert_close_eps(f64::from(gradient[[0, 0]]), 2.0, 1.0e-2);
+    assert_close_eps(f64::from(gradient[[0, 1]]), 4.0, 1.0e-2);
+}
+
+#[test]
+fn differentiation_udfs_reject_unknown_named_functions() {
+    let fixture = differentiation_fixture();
+    let invalid = ScalarValue::Utf8(Some("unknown".to_string()));
+    let error = invoke_udf(
+        &udfs::jacobian_udf(),
+        vec![
+            ColumnarValue::Scalar(invalid.clone()),
+            ColumnarValue::Array(Arc::new(fixture.vectors)),
+        ],
+        vec![fixture.function_field, fixture.vector_field_f64],
+        &[Some(invalid), None],
+        1,
+    )
+    .expect_err("unsupported named function should fail");
+    assert!(error.to_string().contains("unsupported named vector function"));
+}
+
+struct OptimizationFixture {
+    function_field:            FieldRef,
+    learning_rate_field:       FieldRef,
+    iterations_field:          FieldRef,
+    tolerance_field:           FieldRef,
+    contraction_field:         FieldRef,
+    sufficient_decrease_field: FieldRef,
+    point_step_field:          FieldRef,
+    objective:                 ScalarValue,
+    learning_rate:             ScalarValue,
+    iterations:                ScalarValue,
+    tolerance:                 ScalarValue,
+    point_field:               FieldRef,
+    points:                    FixedSizeListArray,
+    direction_field:           FieldRef,
+    directions:                FixedSizeListArray,
+    initial_field:             FieldRef,
+    initials:                  FixedSizeListArray,
+    initial_norm:              f64,
+}
+
+fn optimization_fixture() -> OptimizationFixture {
+    OptimizationFixture {
+        function_field:            Arc::new(Field::new("function", DataType::Utf8, false)),
+        learning_rate_field:       Arc::new(Field::new("learning_rate", DataType::Float64, false)),
+        iterations_field:          Arc::new(Field::new("max_iterations", DataType::Int64, false)),
+        tolerance_field:           Arc::new(Field::new("tolerance", DataType::Float64, false)),
+        contraction_field:         Arc::new(Field::new("contraction", DataType::Float64, false)),
+        sufficient_decrease_field: Arc::new(Field::new(
+            "sufficient_decrease",
+            DataType::Float64,
+            false,
+        )),
+        point_step_field:          Arc::new(Field::new("initial_step", DataType::Float64, false)),
+        objective:                 ScalarValue::Utf8(Some("norm_squared".to_string())),
+        learning_rate:             ScalarValue::Float64(Some(0.25)),
+        iterations:                ScalarValue::Int64(Some(256)),
+        tolerance:                 ScalarValue::Float64(Some(1.0e-6)),
+        point_field:               complex_vector_batch("point", [[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]])
+        .0,
+        points:                    complex_vector_batch("point", [[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]])
+        .1,
+        direction_field:           complex_vector_batch("direction", [[
+            Complex64::new(-1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]])
+        .0,
+        directions:                complex_vector_batch("direction", [[
+            Complex64::new(-1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ]])
+        .1,
+        initial_field:             complex_vector_batch("initial", [[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(-1.0, 0.0),
+        ]])
+        .0,
+        initials:                  complex_vector_batch("initial", [[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(-1.0, 0.0),
+        ]])
+        .1,
+        initial_norm:              [Complex64::new(1.0, 1.0), Complex64::new(-1.0, 0.0)]
+            .into_iter()
+            .map(|value| value.norm_sqr())
+            .sum::<f64>(),
+    }
+}
+
+#[test]
+fn optimization_udfs_backtracking_line_search_returns_positive_step() {
+    let fixture = optimization_fixture();
+    let (line_search_field, line_search_output) = invoke_udf(
+        &udfs::backtracking_line_search_complex_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.objective.clone()),
+            ColumnarValue::Array(Arc::new(fixture.points)),
+            ColumnarValue::Array(Arc::new(fixture.directions)),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(0.5))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-4))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(16))),
+        ],
+        vec![
+            fixture.function_field,
+            fixture.point_field,
+            fixture.direction_field,
+            fixture.point_step_field,
+            fixture.contraction_field,
+            fixture.sufficient_decrease_field,
+            fixture.iterations_field,
+        ],
+        &[
+            Some(fixture.objective),
+            None,
+            None,
+            Some(ScalarValue::Float64(Some(1.0))),
+            Some(ScalarValue::Float64(Some(0.5))),
+            Some(ScalarValue::Float64(Some(1.0e-4))),
+            Some(ScalarValue::Int64(Some(16))),
+        ],
+        1,
+    )
+    .expect("backtracking line search");
+    assert_eq!(line_search_field.data_type(), &DataType::Float64);
+    let alpha = f64_array(&line_search_output).value(0);
+    assert!(alpha.is_finite());
+    assert!(alpha > 0.0);
+}
+
+#[test]
+fn optimization_udfs_gradient_descent_reduces_objective() {
+    let fixture = optimization_fixture();
+    let (field, output) = invoke_udf(
+        &udfs::gradient_descent_complex_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.objective.clone()),
+            ColumnarValue::Array(Arc::new(fixture.initials)),
+            ColumnarValue::Scalar(fixture.learning_rate.clone()),
+            ColumnarValue::Scalar(fixture.iterations.clone()),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            fixture.function_field,
+            fixture.initial_field,
+            fixture.learning_rate_field,
+            fixture.iterations_field,
+            fixture.tolerance_field,
+        ],
+        &[
+            Some(fixture.objective),
+            None,
+            Some(fixture.learning_rate),
+            Some(fixture.iterations),
+            Some(fixture.tolerance),
+        ],
+        1,
+    )
+    .expect("gradient_descent_complex");
+    assert_eq!(array_data_type(&output), field.data_type());
+    let result = ndarrow::complex64_as_array_view2(fixed_size_list_array(&output)).expect("gd");
+    let norm = result.row(0).iter().copied().map(|value| value.norm_sqr()).sum::<f64>();
+    assert!(norm < fixture.initial_norm);
+}
+
+#[test]
+fn optimization_udfs_adam_and_momentum_reduce_objective() {
+    let fixture = optimization_fixture();
+    let (adam_field, adam_output) = invoke_udf(
+        &udfs::adam_complex_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.objective.clone()),
+            ColumnarValue::Array(Arc::new(fixture.initials.clone())),
+        ],
+        vec![Arc::clone(&fixture.function_field), Arc::clone(&fixture.initial_field)],
+        &[Some(fixture.objective.clone()), None],
+        1,
+    )
+    .expect("adam_complex");
+    assert_eq!(array_data_type(&adam_output), adam_field.data_type());
+    let adam =
+        ndarrow::complex64_as_array_view2(fixed_size_list_array(&adam_output)).expect("adam");
+    let adam_norm = adam.row(0).iter().copied().map(|value| value.norm_sqr()).sum::<f64>();
+    assert!(adam_norm < fixture.initial_norm);
+
+    let (momentum_field, momentum_output) = invoke_udf(
+        &udfs::momentum_descent_complex_udf(),
+        vec![
+            ColumnarValue::Scalar(fixture.objective),
+            ColumnarValue::Array(Arc::new(fixture.initials)),
+            ColumnarValue::Scalar(fixture.learning_rate),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(0.8))),
+            ColumnarValue::Scalar(fixture.iterations),
+            ColumnarValue::Scalar(fixture.tolerance),
+        ],
+        vec![
+            fixture.function_field,
+            fixture.initial_field,
+            fixture.learning_rate_field,
+            Arc::new(Field::new("momentum", DataType::Float64, false)),
+            fixture.iterations_field,
+            fixture.tolerance_field,
+        ],
+        &[
+            Some(ScalarValue::Utf8(Some("norm_squared".to_string()))),
+            None,
+            Some(ScalarValue::Float64(Some(0.25))),
+            Some(ScalarValue::Float64(Some(0.8))),
+            Some(ScalarValue::Int64(Some(256))),
+            Some(ScalarValue::Float64(Some(1.0e-6))),
+        ],
+        1,
+    )
+    .expect("momentum_descent_complex");
+    assert_eq!(array_data_type(&momentum_output), momentum_field.data_type());
+    let momentum = ndarrow::complex64_as_array_view2(fixed_size_list_array(&momentum_output))
+        .expect("momentum");
+    let momentum_norm = momentum.row(0).iter().copied().map(|value| value.norm_sqr()).sum::<f64>();
+    assert!(momentum_norm < fixture.initial_norm);
+}
+
+#[test]
+fn optimization_udfs_reject_invalid_learning_rate() {
+    let objective = ScalarValue::Utf8(Some("norm_squared".to_string()));
+    let error = invoke_udf(
+        &udfs::gradient_descent_complex_udf(),
+        vec![
+            ColumnarValue::Scalar(objective),
+            ColumnarValue::Array(Arc::new(
+                complex_vector_batch("bad_initial", [[
+                    Complex64::new(1.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                ]])
+                .1,
+            )),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(-1.0))),
+        ],
+        vec![
+            Arc::new(Field::new("function", DataType::Utf8, false)),
+            complex_vector_field("bad_initial", 2, false).expect("complex vector field"),
+            Arc::new(Field::new("learning_rate", DataType::Float64, false)),
+        ],
+        &[
+            Some(ScalarValue::Utf8(Some("norm_squared".to_string()))),
+            None,
+            Some(ScalarValue::Float64(Some(-1.0))),
+        ],
+        1,
+    )
+    .expect_err("invalid learning-rate should fail");
+    assert!(error.to_string().contains("invalid gradient-descent configuration"));
+}
+
+struct SparseFactorizationFixture {
+    sparse_field:     FieldRef,
+    sparse:           StructArray,
+    rhs_field:        FieldRef,
+    rhs:              StructArray,
+    rhs_matrix_field: FieldRef,
+    rhs_matrices:     StructArray,
+}
+
+fn sparse_factorization_fixture() -> SparseFactorizationFixture {
+    let (sparse_field, sparse) = ndarrow::csr_batch_to_extension_array(
+        "sparse_factorization",
+        vec![[2, 2], [2, 2]],
+        vec![vec![0, 2, 4], vec![0, 1, 2]],
+        vec![vec![0, 1, 0, 1], vec![0, 1]],
+        vec![vec![4.0, 1.0, 1.0, 3.0], vec![2.0, 5.0]],
+    )
+    .map(|(field, array)| (Arc::new(field), array))
+    .expect("sparse factorization batch");
+    let (rhs_field, rhs) = ragged_vectors("rhs", vec![vec![1.0, 2.0], vec![4.0, 10.0]]);
+    let (rhs_matrix_field, rhs_matrices) = ragged_matrices("rhs_matrices", vec![
+        vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+    ]);
+    SparseFactorizationFixture {
+        sparse_field,
+        sparse,
+        rhs_field,
+        rhs,
+        rhs_matrix_field,
+        rhs_matrices,
+    }
+}
+
+fn sparse_factorization_fixture_f32() -> SparseFactorizationFixture {
+    let (sparse_field, sparse) = ndarrow::csr_batch_to_extension_array(
+        "sparse_factorization_f32",
+        vec![[2, 2], [2, 2]],
+        vec![vec![0, 2, 4], vec![0, 1, 2]],
+        vec![vec![0, 1, 0, 1], vec![0, 1]],
+        vec![vec![4.0_f32, 1.0, 1.0, 3.0], vec![2.0_f32, 5.0]],
+    )
+    .map(|(field, array)| (Arc::new(field), array))
+    .expect("sparse factorization batch");
+    let (rhs_field, rhs) = ragged_vectors_f32("rhs_f32", vec![vec![1.0, 2.0], vec![4.0, 10.0]]);
+    let (rhs_matrix_field, rhs_matrices) = ragged_matrices_f32("rhs_matrices_f32", vec![
+        vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+    ]);
+    SparseFactorizationFixture {
+        sparse_field,
+        sparse,
+        rhs_field,
+        rhs,
+        rhs_matrix_field,
+        rhs_matrices,
+    }
+}
+
+#[test]
+fn sparse_lu_factorization_udfs_solve_vectors_and_matrices() {
+    let fixture = sparse_factorization_fixture();
+    let (factor_field, factor_output) = invoke_udf(
+        &udfs::sparse_lu_factor_udf(),
+        vec![ColumnarValue::Array(Arc::new(fixture.sparse.clone()))],
+        vec![Arc::clone(&fixture.sparse_field)],
+        &[None],
+        2,
+    )
+    .expect("sparse_lu_factor");
+    let factorization = struct_array(&factor_output).clone();
+    assert_eq!(factorization.num_columns(), 3);
+
+    let (solve_field, solve_output) = invoke_udf(
+        &udfs::sparse_lu_solve_with_factorization_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse.clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs.clone())),
+            ColumnarValue::Array(Arc::new(factorization.clone())),
+        ],
+        vec![
+            Arc::clone(&fixture.sparse_field),
+            Arc::clone(&fixture.rhs_field),
+            Arc::clone(&factor_field),
+        ],
+        &[None, None, None],
+        2,
+    )
+    .expect("sparse_lu_solve_with_factorization");
+    let mut solve_rows = variable_shape_rows(&solve_field, &solve_output);
+    let (_, first) = solve_rows.next().expect("row 0").expect("row 0 vector");
+    let (_, second) = solve_rows.next().expect("row 1").expect("row 1 vector");
+    let first = first.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    let second = second.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    assert_close(first[[0]], 1.0 / 11.0);
+    assert_close(first[[1]], 7.0 / 11.0);
+    assert_close(second[[0]], 2.0);
+    assert_close(second[[1]], 2.0);
+
+    let (field, output) = invoke_udf(
+        &udfs::sparse_lu_solve_multiple_with_factorization_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse)),
+            ColumnarValue::Array(Arc::new(fixture.rhs_matrices)),
+            ColumnarValue::Array(Arc::new(factorization)),
+        ],
+        vec![fixture.sparse_field, fixture.rhs_matrix_field, factor_field],
+        &[None, None, None],
+        2,
+    )
+    .expect("sparse_lu_solve_multiple_with_factorization");
+    let mut rows = variable_shape_rows(&field, &output);
+    let (_, first) = rows.next().expect("matrix row 0").expect("matrix row 0");
+    let (_, second) = rows.next().expect("matrix row 1").expect("matrix row 1");
+    let first = first.into_dimensionality::<Ix2>().expect("rank-2 matrix");
+    let second = second.into_dimensionality::<Ix2>().expect("rank-2 matrix");
+    assert_close(first[[0, 0]], 3.0 / 11.0);
+    assert_close(first[[0, 1]], -1.0 / 11.0);
+    assert_close(first[[1, 0]], -1.0 / 11.0);
+    assert_close(first[[1, 1]], 4.0 / 11.0);
+    assert_close(second[[0, 0]], 0.5);
+    assert_close(second[[1, 1]], 0.2);
+}
+
+#[test]
+fn sparse_jacobi_preconditioner_udfs_apply_expected_scaling() {
+    let fixture = sparse_factorization_fixture();
+    let (jacobi_field, jacobi_output) = invoke_udf(
+        &udfs::sparse_jacobi_preconditioner_udf(),
+        vec![ColumnarValue::Array(Arc::new(fixture.sparse))],
+        vec![fixture.sparse_field],
+        &[None],
+        2,
+    )
+    .expect("sparse_jacobi_preconditioner");
+    let (field, output) = invoke_udf(
+        &udfs::sparse_apply_jacobi_preconditioner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&jacobi_output).clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs)),
+        ],
+        vec![jacobi_field, fixture.rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("sparse_apply_jacobi_preconditioner");
+    let mut rows = variable_shape_rows(&field, &output);
+    let (_, first) = rows.next().expect("jacobi row 0").expect("jacobi row 0");
+    let (_, second) = rows.next().expect("jacobi row 1").expect("jacobi row 1");
+    let first = first.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    let second = second.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    assert_close(first[[0]], 0.25);
+    assert_close(first[[1]], 2.0 / 3.0);
+    assert_close(second[[0]], 2.0);
+    assert_close(second[[1]], 2.0);
+}
+
+#[test]
+fn sparse_ilut_preconditioner_udfs_produce_finite_rows() {
+    let fixture = sparse_factorization_fixture();
+    let (factor_field, factor_output) = invoke_udf(
+        &udfs::sparse_ilut_factor_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse)),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-8))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
+        ],
+        vec![
+            fixture.sparse_field,
+            Arc::new(Field::new("drop_tolerance", DataType::Float64, false)),
+            Arc::new(Field::new("max_fill", DataType::Int64, false)),
+        ],
+        &[None, Some(ScalarValue::Float64(Some(1.0e-8))), Some(ScalarValue::Int64(Some(8)))],
+        2,
+    )
+    .expect("sparse_ilut_factor");
+    let (field, output) = invoke_udf(
+        &udfs::sparse_apply_ilut_preconditioner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&factor_output).clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs)),
+        ],
+        vec![factor_field, fixture.rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("sparse_apply_ilut_preconditioner");
+    let mut rows = variable_shape_rows(&field, &output);
+    for index in 0..2 {
+        let (_, row) = rows.next().expect("ilut row").expect("ilut row value");
+        let row = row.into_dimensionality::<Ix1>().expect("rank-1 vector");
+        assert_eq!(row.len(), 2, "unexpected ILUT row width at index {index}");
+        assert!(row.iter().all(|value| value.is_finite()));
+    }
+}
+
+fn assert_finite_variable_rank1_rows_f32(
+    field: &FieldRef,
+    output: &ColumnarValue,
+    expected_rows: usize,
+    context: &str,
+) {
+    let mut rows = variable_shape_rows_f32(field, output);
+    for index in 0..expected_rows {
+        let (_, row) = rows.next().expect(context).expect(context);
+        let row = row.into_dimensionality::<Ix1>().expect("rank-1 vector");
+        assert_eq!(row.len(), 2, "unexpected {context} width at index {index}");
+        assert!(row.iter().all(|value| value.is_finite()));
+    }
+}
+
+fn assert_finite_variable_rank2_rows_f32(
+    field: &FieldRef,
+    output: &ColumnarValue,
+    expected_rows: usize,
+    expected_shape: &[usize],
+    context: &str,
+) {
+    let mut rows = variable_shape_rows_f32(field, output);
+    for index in 0..expected_rows {
+        let (_, row) = rows.next().expect(context).expect(context);
+        let row = row.into_dimensionality::<Ix2>().expect("rank-2 matrix");
+        assert_eq!(row.shape(), expected_shape, "unexpected {context} shape at index {index}");
+        assert!(row.iter().all(|value| value.is_finite()));
+    }
+}
+
+#[test]
+fn sparse_factorization_float32_lu_and_jacobi_paths() {
+    let fixture = sparse_factorization_fixture_f32();
+    let (factor_field, factor_output) = invoke_udf(
+        &udfs::sparse_lu_factor_udf(),
+        vec![ColumnarValue::Array(Arc::new(fixture.sparse.clone()))],
+        vec![Arc::clone(&fixture.sparse_field)],
+        &[None],
+        2,
+    )
+    .expect("sparse_lu_factor");
+    let factorization = struct_array(&factor_output).clone();
+    assert_eq!(factorization.num_columns(), 3);
+
+    let (solve_field, solve_output) = invoke_udf(
+        &udfs::sparse_lu_solve_with_factorization_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse.clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs.clone())),
+            ColumnarValue::Array(Arc::new(factorization.clone())),
+        ],
+        vec![
+            Arc::clone(&fixture.sparse_field),
+            Arc::clone(&fixture.rhs_field),
+            Arc::clone(&factor_field),
+        ],
+        &[None, None, None],
+        2,
+    )
+    .expect("sparse_lu_solve_with_factorization");
+    assert_finite_variable_rank1_rows_f32(&solve_field, &solve_output, 2, "solve row");
+
+    let (multiple_field, multiple_output) = invoke_udf(
+        &udfs::sparse_lu_solve_multiple_with_factorization_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse.clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs_matrices.clone())),
+            ColumnarValue::Array(Arc::new(factorization.clone())),
+        ],
+        vec![
+            Arc::clone(&fixture.sparse_field),
+            Arc::clone(&fixture.rhs_matrix_field),
+            Arc::clone(&factor_field),
+        ],
+        &[None, None, None],
+        2,
+    )
+    .expect("sparse_lu_solve_multiple_with_factorization");
+    assert_finite_variable_rank2_rows_f32(
+        &multiple_field,
+        &multiple_output,
+        2,
+        &[2, 2],
+        "solve matrix row",
+    );
+
+    let (jacobi_field, jacobi_output) = invoke_udf(
+        &udfs::sparse_jacobi_preconditioner_udf(),
+        vec![ColumnarValue::Array(Arc::new(fixture.sparse.clone()))],
+        vec![Arc::clone(&fixture.sparse_field)],
+        &[None],
+        2,
+    )
+    .expect("sparse_jacobi_preconditioner");
+    let (jacobi_apply_field, jacobi_apply_output) = invoke_udf(
+        &udfs::sparse_apply_jacobi_preconditioner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&jacobi_output).clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs.clone())),
+        ],
+        vec![jacobi_field, Arc::clone(&fixture.rhs_field)],
+        &[None, None],
+        2,
+    )
+    .expect("sparse_apply_jacobi_preconditioner");
+    assert_finite_variable_rank1_rows_f32(
+        &jacobi_apply_field,
+        &jacobi_apply_output,
+        2,
+        "jacobi row",
+    );
+}
+
+#[test]
+fn sparse_factorization_float32_ilu_preconditioner_paths() {
+    let fixture = sparse_factorization_fixture_f32();
+
+    let (threshold_factor_field, threshold_factor_output) = invoke_udf(
+        &udfs::sparse_ilut_factor_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse.clone())),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0e-8))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(8))),
+        ],
+        vec![
+            Arc::clone(&fixture.sparse_field),
+            Arc::new(Field::new("drop_tolerance", DataType::Float64, false)),
+            Arc::new(Field::new("max_fill", DataType::Int64, false)),
+        ],
+        &[None, Some(ScalarValue::Float64(Some(1.0e-8))), Some(ScalarValue::Int64(Some(8)))],
+        2,
+    )
+    .expect("sparse_ilut_factor");
+    let (threshold_apply_field, threshold_apply_output) = invoke_udf(
+        &udfs::sparse_apply_ilut_preconditioner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&threshold_factor_output).clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs.clone())),
+        ],
+        vec![threshold_factor_field, Arc::clone(&fixture.rhs_field)],
+        &[None, None],
+        2,
+    )
+    .expect("sparse_apply_ilut_preconditioner");
+    assert_finite_variable_rank1_rows_f32(
+        &threshold_apply_field,
+        &threshold_apply_output,
+        2,
+        "ilut row",
+    );
+
+    let (level_factor_field, level_factor_output) = invoke_udf(
+        &udfs::sparse_iluk_factor_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ],
+        vec![fixture.sparse_field, Arc::new(Field::new("level_of_fill", DataType::Int64, false))],
+        &[None, Some(ScalarValue::Int64(Some(1)))],
+        2,
+    )
+    .expect("sparse_iluk_factor");
+    let (level_apply_field, level_apply_output) = invoke_udf(
+        &udfs::sparse_apply_iluk_preconditioner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&level_factor_output).clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs)),
+        ],
+        vec![level_factor_field, fixture.rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("sparse_apply_iluk_preconditioner");
+    assert_finite_variable_rank1_rows_f32(&level_apply_field, &level_apply_output, 2, "iluk row");
+}
+
+#[test]
+fn sparse_iluk_preconditioner_udfs_produce_finite_rows() {
+    let fixture = sparse_factorization_fixture();
+    let (factor_field, factor_output) = invoke_udf(
+        &udfs::sparse_iluk_factor_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.sparse)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ],
+        vec![fixture.sparse_field, Arc::new(Field::new("level_of_fill", DataType::Int64, false))],
+        &[None, Some(ScalarValue::Int64(Some(1)))],
+        2,
+    )
+    .expect("sparse_iluk_factor");
+    let (field, output) = invoke_udf(
+        &udfs::sparse_apply_iluk_preconditioner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&factor_output).clone())),
+            ColumnarValue::Array(Arc::new(fixture.rhs)),
+        ],
+        vec![factor_field, fixture.rhs_field],
+        &[None, None],
+        2,
+    )
+    .expect("sparse_apply_iluk_preconditioner");
+    let mut rows = variable_shape_rows(&field, &output);
+    for index in 0..2 {
+        let (_, row) = rows.next().expect("iluk row").expect("iluk row value");
+        let row = row.into_dimensionality::<Ix1>().expect("rank-1 vector");
+        assert_eq!(row.len(), 2, "unexpected ILU(k) row width at index {index}");
+        assert!(row.iter().all(|value| value.is_finite()));
+    }
+}
+
+struct TensorDecompositionFixture {
+    eps:                  f64,
+    tensor_field:         FieldRef,
+    tensor:               FixedSizeListArray,
+    original:             Array4<f64>,
+    rank_field:           FieldRef,
+    max_iterations_field: FieldRef,
+    tolerance_field:      FieldRef,
+    rank_list_field:      FieldRef,
+    rank:                 ScalarValue,
+    max_iterations:       ScalarValue,
+    tolerance:            ScalarValue,
+    ranks:                ScalarValue,
+}
+
+fn tensor_decomposition_fixture() -> TensorDecompositionFixture {
+    let original =
+        Array4::from_shape_vec((1, 2, 2, 2), vec![1.0, 3.0, 0.5, 1.5, 2.0, 6.0, 1.0, 3.0])
+            .expect("tensor shape");
+    let (tensor_field, tensor) =
+        ndarrow::arrayd_to_fixed_shape_tensor("tensor", original.clone().into_dyn())
+            .map(|(field, array)| (Arc::new(field), array))
+            .expect("tensor batch");
+    TensorDecompositionFixture {
+        eps: 1.0e-6,
+        tensor_field,
+        tensor,
+        original,
+        rank_field: Arc::new(Field::new("rank", DataType::Int64, false)),
+        max_iterations_field: Arc::new(Field::new("max_iterations", DataType::Int64, false)),
+        tolerance_field: Arc::new(Field::new("tolerance", DataType::Float64, false)),
+        rank_list_field: Arc::new(Field::new(
+            "ranks",
+            DataType::new_list(DataType::Int32, false),
+            false,
+        )),
+        rank: ScalarValue::Int64(Some(1)),
+        max_iterations: ScalarValue::Int64(Some(50)),
+        tolerance: ScalarValue::Float64(Some(1.0e-10)),
+        ranks: scalar_int32_list(vec![1, 1, 1]),
+    }
+}
+
+fn tensor4_from_output(field: &FieldRef, output: &ColumnarValue) -> Array4<f64> {
+    fixed_shape_viewd(field, output)
+        .into_dimensionality::<Ix4>()
+        .expect("rank-4 tensor")
+        .to_owned()
+}
+
+fn assert_tensor4_matches(actual: &Array4<f64>, expected: &Array4<f64>, eps: f64) {
+    for i in 0..2 {
+        for j in 0..2 {
+            for k in 0..2 {
+                assert_close_eps(actual[[0, i, j, k]], expected[[0, i, j, k]], eps);
+            }
+        }
+    }
+}
+
+fn reconstruct_tt_tensor(tt_field: &FieldRef, tt_output: &ColumnarValue) -> Array4<f64> {
+    let (field, output) = invoke_udf(
+        &udfs::tensor_tt_svd_reconstruct_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(tt_output).clone()))],
+        vec![Arc::clone(tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_svd_reconstruct");
+    tensor4_from_output(&field, &output)
+}
+
+fn reconstruct_tt_tensor_f32(tt_field: &FieldRef, tt_output: &ColumnarValue) -> Array4<f32> {
+    let (field, output) = invoke_udf(
+        &udfs::tensor_tt_svd_reconstruct_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(tt_output).clone()))],
+        vec![Arc::clone(tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_svd_reconstruct");
+    fixed_shape_view4_f32(&field, &output).to_owned()
+}
+
+#[test]
+fn tensor_cp_reconstruction_udfs_preserve_tensor() {
+    let fixture = tensor_decomposition_fixture();
+    let (cp3_field, cp3_output) = invoke_udf(
+        &udfs::tensor_cp_als3_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor.clone())),
+            ColumnarValue::Scalar(fixture.rank.clone()),
+            ColumnarValue::Scalar(fixture.max_iterations.clone()),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            Arc::clone(&fixture.tensor_field),
+            Arc::clone(&fixture.rank_field),
+            Arc::clone(&fixture.max_iterations_field),
+            Arc::clone(&fixture.tolerance_field),
+        ],
+        &[
+            None,
+            Some(fixture.rank.clone()),
+            Some(fixture.max_iterations.clone()),
+            Some(fixture.tolerance.clone()),
+        ],
+        1,
+    )
+    .expect("tensor_cp_als3");
+    let (field, output) = invoke_udf(
+        &udfs::tensor_cp_als3_reconstruct_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&cp3_output).clone()))],
+        vec![cp3_field],
+        &[None],
+        1,
+    )
+    .expect("tensor_cp_als3_reconstruct");
+    assert_tensor4_matches(&tensor4_from_output(&field, &output), &fixture.original, fixture.eps);
+
+    let (cp_nd_field, cp_nd_output) = invoke_udf(
+        &udfs::tensor_cp_als_nd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor)),
+            ColumnarValue::Scalar(fixture.rank),
+            ColumnarValue::Scalar(fixture.max_iterations),
+            ColumnarValue::Scalar(fixture.tolerance),
+        ],
+        vec![
+            Arc::clone(&fixture.tensor_field),
+            fixture.rank_field,
+            fixture.max_iterations_field,
+            fixture.tolerance_field,
+        ],
+        &[
+            None,
+            Some(ScalarValue::Int64(Some(1))),
+            Some(ScalarValue::Int64(Some(50))),
+            Some(ScalarValue::Float64(Some(1.0e-10))),
+        ],
+        1,
+    )
+    .expect("tensor_cp_als_nd");
+    let (field, output) = invoke_udf(
+        &udfs::tensor_cp_als_nd_reconstruct_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&cp_nd_output).clone()))],
+        vec![cp_nd_field],
+        &[None],
+        1,
+    )
+    .expect("tensor_cp_als_nd_reconstruct");
+    assert_tensor4_matches(&tensor4_from_output(&field, &output), &fixture.original, fixture.eps);
+}
+
+#[test]
+fn tensor_tucker_udfs_project_and_expand_consistently() {
+    let fixture = tensor_decomposition_fixture();
+    let (hosvd_field, hosvd_output) = invoke_udf(
+        &udfs::tensor_hosvd_nd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor.clone())),
+            ColumnarValue::Scalar(fixture.ranks.clone()),
+        ],
+        vec![Arc::clone(&fixture.tensor_field), Arc::clone(&fixture.rank_list_field)],
+        &[None, Some(fixture.ranks.clone())],
+        1,
+    )
+    .expect("tensor_hosvd_nd");
+    let (projected_field, projected_output) = invoke_udf(
+        &udfs::tensor_tucker_project_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor.clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&hosvd_output).clone())),
+        ],
+        vec![Arc::clone(&fixture.tensor_field), Arc::clone(&hosvd_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tucker_project");
+    let projected = tensor4_from_output(&projected_field, &projected_output);
+    assert_eq!(projected.shape(), &[1, 1, 1, 1]);
+
+    let (expanded_field, expanded_output) = invoke_udf(
+        &udfs::tensor_tucker_expand_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&hosvd_output).clone()))],
+        vec![Arc::clone(&hosvd_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tucker_expand");
+    assert_tensor4_matches(
+        &tensor4_from_output(&expanded_field, &expanded_output),
+        &fixture.original,
+        fixture.eps,
+    );
+
+    let (hooi_field, hooi_output) = invoke_udf(
+        &udfs::tensor_hooi_nd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor)),
+            ColumnarValue::Scalar(fixture.ranks),
+            ColumnarValue::Scalar(fixture.max_iterations),
+            ColumnarValue::Scalar(fixture.tolerance),
+        ],
+        vec![
+            fixture.tensor_field,
+            fixture.rank_list_field,
+            fixture.max_iterations_field,
+            fixture.tolerance_field,
+        ],
+        &[
+            None,
+            Some(scalar_int32_list(vec![1, 1, 1])),
+            Some(ScalarValue::Int64(Some(50))),
+            Some(ScalarValue::Float64(Some(1.0e-10))),
+        ],
+        1,
+    )
+    .expect("tensor_hooi_nd");
+    let (field, output) = invoke_udf(
+        &udfs::tensor_tucker_expand_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&hooi_output).clone()))],
+        vec![hooi_field],
+        &[None],
+        1,
+    )
+    .expect("tensor_tucker_expand hooi");
+    assert_tensor4_matches(&tensor4_from_output(&field, &output), &fixture.original, fixture.eps);
+}
+
+#[test]
+fn tensor_tt_decomposition_udfs_preserve_tensor_and_inner_products() {
+    let fixture = tensor_decomposition_fixture();
+    let (tt_field, tt_output) = invoke_udf(
+        &udfs::tensor_tt_svd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            Arc::clone(&fixture.tensor_field),
+            Arc::clone(&fixture.rank_field),
+            Arc::clone(&fixture.tolerance_field),
+        ],
+        &[None, Some(ScalarValue::Int64(Some(2))), Some(fixture.tolerance.clone())],
+        1,
+    )
+    .expect("tensor_tt_svd");
+    let reconstructed = reconstruct_tt_tensor(&tt_field, &tt_output);
+    assert_tensor4_matches(&reconstructed, &fixture.original, fixture.eps);
+
+    let (norm_field, norm_output) = invoke_udf(
+        &udfs::tensor_tt_norm_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone()))],
+        vec![Arc::clone(&tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_norm");
+    assert_eq!(norm_field.data_type(), &DataType::Float64);
+    let tt_norm = f64_array(&norm_output).value(0);
+
+    let (inner_field, inner_output) = invoke_udf(
+        &udfs::tensor_tt_inner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+        ],
+        vec![Arc::clone(&tt_field), Arc::clone(&tt_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tt_inner");
+    assert_eq!(inner_field.data_type(), &DataType::Float64);
+    let tt_inner = f64_array(&inner_output).value(0);
+    assert_close_eps(tt_inner, tt_norm * tt_norm, fixture.eps);
+}
+
+#[test]
+fn tensor_tt_structure_udfs_preserve_tensor() {
+    let fixture = tensor_decomposition_fixture();
+    let (tt_field, tt_output) = invoke_udf(
+        &udfs::tensor_tt_svd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            Arc::clone(&fixture.tensor_field),
+            Arc::clone(&fixture.rank_field),
+            Arc::clone(&fixture.tolerance_field),
+        ],
+        &[None, Some(ScalarValue::Int64(Some(2))), Some(fixture.tolerance.clone())],
+        1,
+    )
+    .expect("tensor_tt_svd");
+    let (left_field, left_output) = invoke_udf(
+        &udfs::tensor_tt_orthogonalize_left_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone()))],
+        vec![Arc::clone(&tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_orthogonalize_left");
+    assert_tensor4_matches(
+        &reconstruct_tt_tensor(&left_field, &left_output),
+        &fixture.original,
+        fixture.eps,
+    );
+
+    let (right_field, right_output) = invoke_udf(
+        &udfs::tensor_tt_orthogonalize_right_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone()))],
+        vec![Arc::clone(&tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_orthogonalize_right");
+    assert_tensor4_matches(
+        &reconstruct_tt_tensor(&right_field, &right_output),
+        &fixture.original,
+        fixture.eps,
+    );
+
+    let (round_field, round_output) = invoke_udf(
+        &udfs::tensor_tt_round_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance),
+        ],
+        vec![tt_field, fixture.rank_field, fixture.tolerance_field],
+        &[None, Some(ScalarValue::Int64(Some(2))), Some(ScalarValue::Float64(Some(1.0e-10)))],
+        1,
+    )
+    .expect("tensor_tt_round");
+    assert_tensor4_matches(
+        &reconstruct_tt_tensor(&round_field, &round_output),
+        &fixture.original,
+        fixture.eps,
+    );
+}
+
+#[test]
+fn tensor_tt_add_and_hadamard_udfs_produce_expected_values() {
+    let fixture = tensor_decomposition_fixture();
+    let (tt_field, tt_output) = invoke_udf(
+        &udfs::tensor_tt_svd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            Arc::clone(&fixture.tensor_field),
+            Arc::clone(&fixture.rank_field),
+            Arc::clone(&fixture.tolerance_field),
+        ],
+        &[None, Some(ScalarValue::Int64(Some(2))), Some(fixture.tolerance.clone())],
+        1,
+    )
+    .expect("tensor_tt_svd");
+    let (add_field, add_output) = invoke_udf(
+        &udfs::tensor_tt_add_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+        ],
+        vec![Arc::clone(&tt_field), Arc::clone(&tt_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tt_add");
+    let add_reconstructed = reconstruct_tt_tensor(&add_field, &add_output);
+
+    let (hadamard_field, hadamard_output) = invoke_udf(
+        &udfs::tensor_tt_hadamard_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+        ],
+        vec![Arc::clone(&tt_field), Arc::clone(&tt_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tt_hadamard");
+    let hadamard_reconstructed = reconstruct_tt_tensor(&hadamard_field, &hadamard_output);
+
+    let (round_field, round_output) = invoke_udf(
+        &udfs::tensor_tt_hadamard_round_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance),
+        ],
+        vec![
+            Arc::clone(&tt_field),
+            Arc::clone(&tt_field),
+            fixture.rank_field,
+            fixture.tolerance_field,
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(2))), Some(ScalarValue::Float64(Some(1.0e-10)))],
+        1,
+    )
+    .expect("tensor_tt_hadamard_round");
+    let rounded_reconstructed = reconstruct_tt_tensor(&round_field, &round_output);
+
+    for i in 0..2 {
+        for j in 0..2 {
+            for k in 0..2 {
+                assert_close_eps(
+                    add_reconstructed[[0, i, j, k]],
+                    fixture.original[[0, i, j, k]] * 2.0,
+                    fixture.eps,
+                );
+                let squared = fixture.original[[0, i, j, k]] * fixture.original[[0, i, j, k]];
+                assert_close_eps(hadamard_reconstructed[[0, i, j, k]], squared, fixture.eps);
+                assert_close_eps(rounded_reconstructed[[0, i, j, k]], squared, fixture.eps);
+            }
+        }
+    }
+}
+
+struct TensorDecompositionFixtureF32 {
+    tensor_field:         FieldRef,
+    tensor:               FixedSizeListArray,
+    original:             Array4<f32>,
+    rank_field:           FieldRef,
+    max_iterations_field: FieldRef,
+    tolerance_field:      FieldRef,
+    rank_list_field:      FieldRef,
+    rank:                 ScalarValue,
+    max_iterations:       ScalarValue,
+    tolerance:            ScalarValue,
+    ranks:                ScalarValue,
+}
+
+fn tensor_decomposition_fixture_f32() -> TensorDecompositionFixtureF32 {
+    let original =
+        Array4::from_shape_vec((1, 2, 2, 2), vec![1.0_f32, 3.0, 0.5, 1.5, 2.0, 6.0, 1.0, 3.0])
+            .expect("tensor shape");
+    let (tensor_field, tensor) =
+        tensor_batch4_f32("tensor_f32", [[[[1.0, 3.0], [0.5, 1.5]], [[2.0, 6.0], [1.0, 3.0]]]]);
+    TensorDecompositionFixtureF32 {
+        tensor_field,
+        tensor,
+        original,
+        rank_field: Arc::new(Field::new("rank", DataType::Int64, false)),
+        max_iterations_field: Arc::new(Field::new("max_iterations", DataType::Int64, false)),
+        tolerance_field: Arc::new(Field::new("tolerance", DataType::Float64, false)),
+        rank_list_field: Arc::new(Field::new(
+            "ranks",
+            DataType::new_list(DataType::Int32, false),
+            false,
+        )),
+        rank: ScalarValue::Int64(Some(1)),
+        max_iterations: ScalarValue::Int64(Some(50)),
+        tolerance: ScalarValue::Float64(Some(1.0e-8)),
+        ranks: scalar_int32_list(vec![1, 1, 1]),
+    }
+}
+
+fn assert_tensor4_matches_f32(actual: &Array4<f32>, expected: &Array4<f32>, epsilon: f64) {
+    for (actual, expected) in actual.iter().zip(expected.iter()) {
+        assert!((f64::from(*actual) - f64::from(*expected)).abs() < epsilon);
+    }
+}
+
+#[test]
+fn tensor_decomposition_float32_cp_paths() {
+    let fixture = tensor_decomposition_fixture_f32();
+    let (cp3_field, cp3_output) = invoke_udf(
+        &udfs::tensor_cp_als3_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor.clone())),
+            ColumnarValue::Scalar(fixture.rank.clone()),
+            ColumnarValue::Scalar(fixture.max_iterations.clone()),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            Arc::clone(&fixture.tensor_field),
+            Arc::clone(&fixture.rank_field),
+            Arc::clone(&fixture.max_iterations_field),
+            Arc::clone(&fixture.tolerance_field),
+        ],
+        &[
+            None,
+            Some(fixture.rank.clone()),
+            Some(fixture.max_iterations.clone()),
+            Some(fixture.tolerance.clone()),
+        ],
+        1,
+    )
+    .expect("tensor_cp_als3");
+    let (cp3_reconstruct_field, cp3_reconstruct_output) = invoke_udf(
+        &udfs::tensor_cp_als3_reconstruct_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&cp3_output).clone()))],
+        vec![cp3_field],
+        &[None],
+        1,
+    )
+    .expect("tensor_cp_als3_reconstruct");
+    assert_tensor4_matches_f32(
+        &fixed_shape_view4_f32(&cp3_reconstruct_field, &cp3_reconstruct_output).to_owned(),
+        &fixture.original,
+        1.0e-3,
+    );
+
+    let (cp_nd_field, cp_nd_output) = invoke_udf(
+        &udfs::tensor_cp_als_nd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor)),
+            ColumnarValue::Scalar(fixture.rank),
+            ColumnarValue::Scalar(fixture.max_iterations),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            fixture.tensor_field,
+            fixture.rank_field,
+            fixture.max_iterations_field,
+            Arc::clone(&fixture.tolerance_field),
+        ],
+        &[
+            None,
+            Some(ScalarValue::Int64(Some(1))),
+            Some(ScalarValue::Int64(Some(50))),
+            Some(fixture.tolerance.clone()),
+        ],
+        1,
+    )
+    .expect("tensor_cp_als_nd");
+    let (cp_nd_reconstruct_field, cp_nd_reconstruct_output) = invoke_udf(
+        &udfs::tensor_cp_als_nd_reconstruct_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&cp_nd_output).clone()))],
+        vec![cp_nd_field],
+        &[None],
+        1,
+    )
+    .expect("tensor_cp_als_nd_reconstruct");
+    assert_eq!(
+        fixed_shape_view4_f32(&cp_nd_reconstruct_field, &cp_nd_reconstruct_output).shape(),
+        &[1, 2, 2, 2]
+    );
+}
+
+#[test]
+fn tensor_decomposition_float32_tucker_paths() {
+    let fixture = tensor_decomposition_fixture_f32();
+    let (hosvd_field, hosvd_output) = invoke_udf(
+        &udfs::tensor_hosvd_nd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor.clone())),
+            ColumnarValue::Scalar(fixture.ranks.clone()),
+        ],
+        vec![Arc::clone(&fixture.tensor_field), Arc::clone(&fixture.rank_list_field)],
+        &[None, Some(fixture.ranks.clone())],
+        1,
+    )
+    .expect("tensor_hosvd_nd");
+    let (projected_field, projected_output) = invoke_udf(
+        &udfs::tensor_tucker_project_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor.clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&hosvd_output).clone())),
+        ],
+        vec![Arc::clone(&fixture.tensor_field), Arc::clone(&hosvd_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tucker_project");
+    assert_eq!(fixed_shape_view4_f32(&projected_field, &projected_output).shape(), &[1, 1, 1, 1]);
+
+    let (expanded_field, expanded_output) = invoke_udf(
+        &udfs::tensor_tucker_expand_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&hosvd_output).clone()))],
+        vec![Arc::clone(&hosvd_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tucker_expand");
+    assert_eq!(fixed_shape_view4_f32(&expanded_field, &expanded_output).shape(), &[1, 2, 2, 2]);
+
+    let (hooi_field, hooi_output) = invoke_udf(
+        &udfs::tensor_hooi_nd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(fixture.tensor)),
+            ColumnarValue::Scalar(fixture.ranks),
+            ColumnarValue::Scalar(fixture.max_iterations),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![
+            fixture.tensor_field,
+            fixture.rank_list_field,
+            fixture.max_iterations_field,
+            Arc::clone(&fixture.tolerance_field),
+        ],
+        &[
+            None,
+            Some(scalar_int32_list(vec![1, 1, 1])),
+            Some(ScalarValue::Int64(Some(50))),
+            Some(fixture.tolerance.clone()),
+        ],
+        1,
+    )
+    .expect("tensor_hooi_nd");
+    let (hooi_expanded_field, hooi_expanded_output) = invoke_udf(
+        &udfs::tensor_tucker_expand_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&hooi_output).clone()))],
+        vec![hooi_field],
+        &[None],
+        1,
+    )
+    .expect("tensor_tucker_expand");
+    assert_eq!(fixed_shape_view4_f32(&hooi_expanded_field, &hooi_expanded_output).shape(), &[
+        1, 2, 2, 2
+    ]);
+}
+
+fn tt_decomposition_output_f32() -> (TensorDecompositionFixtureF32, FieldRef, ColumnarValue) {
+    let fixture = tensor_decomposition_fixture_f32();
+    let tensor = fixture.tensor.clone();
+    let tensor_field = Arc::clone(&fixture.tensor_field);
+    let (tt_field, tt_output) = invoke_udf(
+        &udfs::tensor_tt_svd_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(tensor)),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![tensor_field, Arc::clone(&fixture.rank_field), Arc::clone(&fixture.tolerance_field)],
+        &[None, Some(ScalarValue::Int64(Some(2))), Some(fixture.tolerance.clone())],
+        1,
+    )
+    .expect("tensor_tt_svd");
+    (fixture, tt_field, tt_output)
+}
+
+#[test]
+fn tensor_decomposition_float32_tt_reconstruction_and_metrics() {
+    let (fixture, tt_field, tt_output) = tt_decomposition_output_f32();
+    assert_tensor4_matches_f32(
+        &reconstruct_tt_tensor_f32(&tt_field, &tt_output),
+        &fixture.original,
+        1.0e-3,
+    );
+
+    let (norm_field, norm_output) = invoke_udf(
+        &udfs::tensor_tt_norm_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone()))],
+        vec![Arc::clone(&tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_norm");
+    assert_eq!(norm_field.data_type(), &DataType::Float32);
+    assert!(f32_array(&norm_output).value(0).is_finite());
+
+    let (inner_field, inner_output) = invoke_udf(
+        &udfs::tensor_tt_inner_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+        ],
+        vec![Arc::clone(&tt_field), Arc::clone(&tt_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tt_inner");
+    assert_eq!(inner_field.data_type(), &DataType::Float32);
+    assert!(f32_array(&inner_output).value(0).is_finite());
+}
+
+#[test]
+fn tensor_decomposition_float32_tt_structure_paths() {
+    let (fixture, tt_field, tt_output) = tt_decomposition_output_f32();
+    let (left_field, left_output) = invoke_udf(
+        &udfs::tensor_tt_orthogonalize_left_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone()))],
+        vec![Arc::clone(&tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_orthogonalize_left");
+    assert_eq!(reconstruct_tt_tensor_f32(&left_field, &left_output).shape(), &[1, 2, 2, 2]);
+
+    let (right_field, right_output) = invoke_udf(
+        &udfs::tensor_tt_orthogonalize_right_udf(),
+        vec![ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone()))],
+        vec![Arc::clone(&tt_field)],
+        &[None],
+        1,
+    )
+    .expect("tensor_tt_orthogonalize_right");
+    assert_eq!(reconstruct_tt_tensor_f32(&right_field, &right_output).shape(), &[1, 2, 2, 2]);
+
+    let (round_field, round_output) = invoke_udf(
+        &udfs::tensor_tt_round_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance.clone()),
+        ],
+        vec![Arc::clone(&tt_field), fixture.rank_field, Arc::clone(&fixture.tolerance_field)],
+        &[None, Some(ScalarValue::Int64(Some(2))), Some(fixture.tolerance.clone())],
+        1,
+    )
+    .expect("tensor_tt_round");
+    assert_eq!(reconstruct_tt_tensor_f32(&round_field, &round_output).shape(), &[1, 2, 2, 2]);
+
+    let (add_field, add_output) = invoke_udf(
+        &udfs::tensor_tt_add_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+        ],
+        vec![Arc::clone(&tt_field), Arc::clone(&tt_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tt_add");
+    assert!(
+        reconstruct_tt_tensor_f32(&add_field, &add_output).iter().all(|value| value.is_finite())
+    );
+
+    let (hadamard_field, hadamard_output) = invoke_udf(
+        &udfs::tensor_tt_hadamard_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+        ],
+        vec![Arc::clone(&tt_field), Arc::clone(&tt_field)],
+        &[None, None],
+        1,
+    )
+    .expect("tensor_tt_hadamard");
+    assert!(
+        reconstruct_tt_tensor_f32(&hadamard_field, &hadamard_output)
+            .iter()
+            .all(|value| value.is_finite())
+    );
+
+    let (hadamard_round_field, hadamard_round_output) = invoke_udf(
+        &udfs::tensor_tt_hadamard_round_udf(),
+        vec![
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Array(Arc::new(struct_array(&tt_output).clone())),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(fixture.tolerance),
+        ],
+        vec![
+            Arc::clone(&tt_field),
+            Arc::clone(&tt_field),
+            Arc::new(Field::new("max_rank", DataType::Int64, false)),
+            fixture.tolerance_field,
+        ],
+        &[None, None, Some(ScalarValue::Int64(Some(2))), Some(ScalarValue::Float64(Some(1.0e-8)))],
+        1,
+    )
+    .expect("tensor_tt_hadamard_round");
+    assert!(
+        reconstruct_tt_tensor_f32(&hadamard_round_field, &hadamard_round_output)
+            .iter()
+            .all(|value| value.is_finite())
+    );
 }

@@ -94,6 +94,16 @@
     - `linear_regression_fit`
     These should converge on typed sufficient-statistics state before more non-scalar surface area
     is added.
+38. When a grouped numerical workflow can be expressed exactly as a retractable aggregate, prefer
+    `AggregateUDF` plus retract support over building a duplicate `WindowUDF` surface.
+39. Generic table-function ergonomics should prefer small composable utilities such as
+    `unpack_struct` over one bespoke UDTF per struct-valued scalar result.
+40. Planner integration should start with per-UDF simplify hooks; broader planner hooks or custom
+    expression planning must be justified by a concrete SQL contract that ordinary scalar,
+    aggregate, or table functions cannot express cleanly.
+41. Named-function differentiation is the admitted SQL contract for `jacobian`,
+    `jacobian_central`, `gradient`, and `hessian`; generic closure-style callback passing remains
+    out of scope for SQL.
 
 ## Cross-Layer Contract Model
 

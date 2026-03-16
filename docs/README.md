@@ -26,8 +26,8 @@ This folder contains the current, authoritative direction for `ndatafusion`.
     - `nabled 0.0.7`
 12. Capability parity matters more than 1:1 overload mirroring.
 13. Copy-light Arrow/DataFusion execution is mandatory; heavy hidden materialization is not.
-14. V1 publish scope is UDF-first. UDAFs, window functions, table functions, and planner sugar are
-    optional only when they clearly improve a natural SQL contract.
+14. Scalar UDFs remain the primary surface, but `AggregateUDF` and narrow table-function support
+    are now admitted where they clearly improve the SQL contract.
 
 ## Documents
 
@@ -73,8 +73,8 @@ After reading the docs above, a contributor should be able to answer:
 4. What is the current v1 sufficiency verdict? (`docs/CAPABILITY_MATRIX.md`)
 5. What is the next milestone? (`docs/STATUS.md` and `docs/EXECUTION_TRACKER.md`)
 6. What are the mandatory quality gates? (`just checks`, coverage greater than 90% before push)
-7. Which DataFusion extension seams are in play? (`ScalarUDF` first, with optional planners or
-   rewrites only when needed)
+7. Which DataFusion extension seams are in play? (`ScalarUDF` first, plus the current aggregate
+   wave, `unpack_struct`, and selective simplify hooks)
 8. What boundary shapes are currently admitted? (Batch-native and fallback-lifted forms of
    `nabled`'s vector, matrix, tensor, sparse, and complex Arrow contracts, with the required
    upstream hardening now released in `ndarrow` and `nabled`)

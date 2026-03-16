@@ -7,10 +7,11 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::Result;
 use datafusion::common::utils::arrays_into_list_array;
+use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::execution::registry::MemoryFunctionRegistry;
+use datafusion::logical_expr::{Expr, col};
 use datafusion::prelude::SessionContext;
 use ndarray::{Array1, Array2, Array3, Array4, Ix1, Ix2, Ix3, Ix4};
 use num_complex::Complex64;
@@ -34,6 +35,10 @@ fn float64_list_array(rows: Vec<Vec<f64>>) -> ListArray {
     ListArray::from_iter_primitive::<Float64Type, _, _>(
         rows.into_iter().map(|row| Some(row.into_iter().map(Some).collect::<Vec<_>>())),
     )
+}
+
+fn scalar_int32_list(values: Vec<i32>) -> ScalarValue {
+    ScalarValue::List(Arc::new(int32_list_array(vec![values])))
 }
 
 fn float32_fixed_size_list_array(rows: Vec<Vec<f32>>) -> FixedSizeListArray {
@@ -89,6 +94,35 @@ fn complex64_ragged_matrices(name: &str, rows: Vec<Vec<Vec<Complex64>>>) -> (Fie
         .collect::<Vec<_>>();
     let (field, array) = ndarrow::arrays_complex64_to_variable_shape_tensor(name, rows, None)
         .expect("complex ragged tensors");
+    (field, array)
+}
+
+fn ragged_vectors_f32(name: &str, rows: Vec<Vec<f32>>) -> (Field, StructArray) {
+    let rows = rows
+        .into_iter()
+        .map(Array1::from_vec)
+        .map(ndarray::ArrayBase::into_dyn)
+        .collect::<Vec<_>>();
+    let (field, array) =
+        ndarrow::arrays_to_variable_shape_tensor(name, rows, Some(vec![None])).expect("ragged");
+    (field, array)
+}
+
+fn ragged_matrices_f32(name: &str, rows: Vec<Vec<Vec<f32>>>) -> (Field, StructArray) {
+    let rows = rows
+        .into_iter()
+        .map(|matrix| {
+            let row_count = matrix.len();
+            let col_count = matrix.first().map_or(0, Vec::len);
+            let values = matrix.into_iter().flatten().collect::<Vec<_>>();
+            Array2::from_shape_vec((row_count, col_count), values)
+                .expect("matrix batch shape")
+                .into_dyn()
+        })
+        .collect::<Vec<_>>();
+    let (field, array) =
+        ndarrow::arrays_to_variable_shape_tensor(name, rows, Some(vec![None, None]))
+            .expect("ragged matrices");
     (field, array)
 }
 
@@ -210,6 +244,39 @@ fn assert_complex_matrix_column(batch: &RecordBatch, index: usize, expected: [[C
             assert_close(output[[0, i, j]].im, expected[i][j].im);
         }
     }
+}
+
+fn assert_complex_eigen_struct_column(
+    batch: &RecordBatch,
+    index: usize,
+    min_eigenvalue: f64,
+    max_eigenvalue: f64,
+) {
+    let field = batch.schema().field(index).clone();
+    let DataType::Struct(fields) = field.data_type() else {
+        panic!("expected complex eigen struct output");
+    };
+    let output = struct_column(batch, index);
+    let eigenvalues = output
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex eigenvalues");
+    let eigenvalues = ndarrow::complex64_as_array_view2(eigenvalues).expect("complex eigenvalues");
+    let schur_vectors = output
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex schur vectors");
+    let schur_vectors =
+        ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&fields[1], schur_vectors)
+            .expect("complex schur vectors")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 complex schur vectors");
+    let real_parts = [eigenvalues[[0, 0]].re, eigenvalues[[0, 1]].re];
+    assert_close(real_parts.into_iter().fold(f64::INFINITY, f64::min), min_eigenvalue);
+    assert_close(real_parts.into_iter().fold(f64::NEG_INFINITY, f64::max), max_eigenvalue);
+    assert_eq!(schur_vectors.shape(), &[1, 2, 2]);
 }
 
 fn assert_two_complex_tensor_struct_column(
@@ -341,6 +408,51 @@ fn direct_complex_spectral_batch() -> Result<RecordBatch> {
     ])?)
 }
 
+fn direct_real_spectral_and_equation_batch() -> Result<RecordBatch> {
+    let (spectral_field, spectral_matrix) = ndarrow::arrayd_to_fixed_shape_tensor(
+        "spectral_matrix",
+        Array3::from_shape_vec((1, 2, 2), vec![4.0_f64, 0.0, 0.0, 9.0])
+            .expect("real spectral matrix batch")
+            .into_dyn(),
+    )
+    .expect("real spectral matrix batch");
+    let (left_field, left_matrix) = ndarrow::arrayd_to_fixed_shape_tensor(
+        "left_matrix",
+        Array3::from_shape_vec((1, 2, 2), vec![1.0_f64, 0.0, 0.0, 2.0])
+            .expect("left matrix batch")
+            .into_dyn(),
+    )
+    .expect("left matrix batch");
+    let (right_field, right_matrix) = ndarrow::arrayd_to_fixed_shape_tensor(
+        "right_matrix",
+        Array3::from_shape_vec((1, 2, 2), vec![3.0_f64, 0.0, 0.0, 4.0])
+            .expect("right matrix batch")
+            .into_dyn(),
+    )
+    .expect("right matrix batch");
+    let (constant_field, constant_matrix) = ndarrow::arrayd_to_fixed_shape_tensor(
+        "constant_matrix",
+        Array3::from_shape_vec((1, 2, 2), vec![5.0_f64, 6.0, 7.0, 8.0])
+            .expect("constant matrix batch")
+            .into_dyn(),
+    )
+    .expect("constant matrix batch");
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        spectral_field,
+        left_field,
+        right_field,
+        constant_field,
+    ]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(spectral_matrix) as ArrayRef,
+        Arc::new(left_matrix) as ArrayRef,
+        Arc::new(right_matrix) as ArrayRef,
+        Arc::new(constant_matrix) as ArrayRef,
+    ])?)
+}
+
 fn direct_complex_pca_batch() -> Result<RecordBatch> {
     let (matrix_field, matrix) = complex64_matrix_batch("matrix", [[
         [Complex64::new(1.0, 1.0), Complex64::new(2.0, 0.0)],
@@ -429,15 +541,119 @@ fn assert_direct_complex_spectral_results(batch: &RecordBatch) {
         Complex64::new(0.0, 0.0),
         Complex64::new(3.0, 0.0),
     ]];
-
-    assert_two_complex_tensor_struct_column(batch, 1, identity, spectral);
+    assert_complex_eigen_struct_column(batch, 1, 4.0, 9.0);
     assert_two_complex_tensor_struct_column(batch, 2, identity, spectral);
-    assert_complex_matrix_column(batch, 3, exp_values);
+    assert_two_complex_tensor_struct_column(batch, 3, identity, spectral);
     assert_complex_matrix_column(batch, 4, exp_values);
-    assert_complex_matrix_column(batch, 5, log_values);
+    assert_complex_matrix_column(batch, 5, exp_values);
     assert_complex_matrix_column(batch, 6, log_values);
-    assert_complex_matrix_column(batch, 7, power_values);
-    assert_complex_matrix_column(batch, 8, identity);
+    assert_complex_matrix_column(batch, 7, log_values);
+    assert_complex_matrix_column(batch, 8, power_values);
+    assert_complex_matrix_column(batch, 9, identity);
+}
+
+fn assert_real_bi_eigen_struct_column(batch: &RecordBatch, index: usize, min: f64, max: f64) {
+    let field = batch.schema().field(index).clone();
+    let DataType::Struct(fields) = field.data_type() else {
+        panic!("expected real bi-eigen struct output");
+    };
+    let output = struct_column(batch, index);
+    let eigenvalues = output
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("complex eigenvalues");
+    let eigenvalues = ndarrow::complex64_as_array_view2(eigenvalues).expect("complex eigenvalues");
+    let right = output
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("right eigenvectors");
+    let right = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&fields[1], right)
+        .expect("right eigenvectors")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 right eigenvectors");
+    let left =
+        output.column(2).as_any().downcast_ref::<FixedSizeListArray>().expect("left eigenvectors");
+    let left = ndarrow::complex64_fixed_shape_tensor_as_array_viewd(&fields[2], left)
+        .expect("left eigenvectors")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 left eigenvectors");
+    let diagonal = output
+        .column(3)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("balancing diagonal");
+    let diagonal =
+        ndarrow::fixed_size_list_as_array2::<Float64Type>(diagonal).expect("balancing diagonal");
+    let balanced =
+        output.column(4).as_any().downcast_ref::<FixedSizeListArray>().expect("balanced matrix");
+    let balanced = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[4], balanced)
+        .expect("balanced matrix")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 balanced matrix");
+    let real_parts = [eigenvalues[[0, 0]].re, eigenvalues[[0, 1]].re];
+    assert_close(real_parts.into_iter().fold(f64::INFINITY, f64::min), min);
+    assert_close(real_parts.into_iter().fold(f64::NEG_INFINITY, f64::max), max);
+    assert_eq!(right.shape(), &[1, 2, 2]);
+    assert_eq!(left.shape(), &[1, 2, 2]);
+    assert_close(diagonal[[0, 0]], 1.0);
+    assert_close(diagonal[[0, 1]], 1.0);
+    assert_close(balanced[[0, 0, 0]], 4.0);
+    assert_close(balanced[[0, 1, 1]], 9.0);
+}
+
+fn assert_mixed_sylvester_struct_column(
+    batch: &RecordBatch,
+    index: usize,
+    expected: [[f64; 2]; 2],
+) {
+    let field = batch.schema().field(index).clone();
+    let DataType::Struct(fields) = field.data_type() else {
+        panic!("expected mixed sylvester struct output");
+    };
+    let output = struct_column(batch, index);
+    let solution = output
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("mixed sylvester solution");
+    let solution = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&fields[0], solution)
+        .expect("mixed sylvester solution")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 mixed sylvester solution");
+    let refinement =
+        output.column(1).as_any().downcast_ref::<Int64Array>().expect("refinement iterations");
+    for (i, row) in expected.into_iter().enumerate() {
+        for (j, value) in row.into_iter().enumerate() {
+            assert_close(solution[[0, i, j]], value);
+        }
+    }
+    assert!(refinement.value(0) >= 0);
+}
+
+fn assert_direct_real_spectral_and_equation_results(batch: &RecordBatch, include_mixed: bool) {
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(int64_column(batch, 0).value(0), 1);
+    assert_complex_eigen_struct_column(batch, 1, 4.0, 9.0);
+    assert_real_bi_eigen_struct_column(batch, 2, 4.0, 9.0);
+    let sylvester_field = batch.schema().field(3).clone();
+    let sylvester =
+        batch.column(3).as_any().downcast_ref::<FixedSizeListArray>().expect("sylvester solution");
+    let sylvester =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(&sylvester_field, sylvester)
+            .expect("sylvester solution")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 sylvester solution");
+    let expected = [[5.0 / 4.0, 6.0 / 5.0], [7.0 / 5.0, 8.0 / 6.0]];
+    for (i, row) in expected.into_iter().enumerate() {
+        for (j, value) in row.into_iter().enumerate() {
+            assert_close(sylvester[[0, i, j]], value);
+        }
+    }
+    if include_mixed {
+        assert_mixed_sylvester_struct_column(batch, 4, expected);
+    }
 }
 
 fn assert_direct_complex_pca_results(batch: &RecordBatch) {
@@ -525,6 +741,189 @@ fn direct_complex_tensor_batch() -> Result<RecordBatch> {
         Arc::new(tensor) as ArrayRef,
         Arc::new(ragged) as ArrayRef,
     ])?)
+}
+
+fn direct_differentiation_batch() -> Result<RecordBatch> {
+    let vectors = float32_fixed_size_list_array(vec![vec![2.0, 3.0], vec![1.0, 4.0]]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("vector_batch", vectors.data_type().clone(), false),
+    ]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(vectors) as ArrayRef,
+    ])?)
+}
+
+fn direct_complex_optimization_batch() -> Result<RecordBatch> {
+    let point = complex64_fixed_size_list_array(vec![vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]]);
+    let direction = complex64_fixed_size_list_array(vec![vec![
+        Complex64::new(-1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+    ]]);
+    let initial = complex64_fixed_size_list_array(vec![vec![
+        Complex64::new(1.0, 1.0),
+        Complex64::new(-1.0, 0.0),
+    ]]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("point_batch", point.data_type().clone(), false),
+        Field::new("direction_batch", direction.data_type().clone(), false),
+        Field::new("initial_batch", initial.data_type().clone(), false),
+    ]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(point) as ArrayRef,
+        Arc::new(direction) as ArrayRef,
+        Arc::new(initial) as ArrayRef,
+    ])?)
+}
+
+fn direct_sparse_factorization_batch() -> Result<RecordBatch> {
+    let (sparse_field, sparse) = ndarrow::csr_batch_to_extension_array(
+        "sparse_batch",
+        vec![[2, 2], [2, 2]],
+        vec![vec![0, 2, 4], vec![0, 1, 2]],
+        vec![vec![0, 1, 0, 1], vec![0, 1]],
+        vec![vec![4.0_f32, 1.0, 1.0, 3.0], vec![2.0_f32, 5.0]],
+    )
+    .expect("sparse factorization batch");
+    let (rhs_field, rhs) = ragged_vectors_f32("rhs", vec![vec![1.0, 2.0], vec![4.0, 10.0]]);
+    let (rhs_matrices_field, rhs_matrices) = ragged_matrices_f32("rhs_matrices", vec![
+        vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        sparse_field,
+        rhs_field,
+        rhs_matrices_field,
+    ]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64, 2])) as ArrayRef,
+        Arc::new(sparse) as ArrayRef,
+        Arc::new(rhs) as ArrayRef,
+        Arc::new(rhs_matrices) as ArrayRef,
+    ])?)
+}
+
+fn direct_tensor_decomposition_batch() -> Result<RecordBatch> {
+    let values =
+        Array4::from_shape_vec((1, 2, 2, 2), vec![1.0_f32, 3.0, 0.5, 1.5, 2.0, 6.0, 1.0, 3.0])
+            .expect("tensor batch");
+    let (tensor_field, tensor) =
+        ndarrow::arrayd_to_fixed_shape_tensor("tensor_batch", values.into_dyn())
+            .expect("tensor batch");
+    let schema =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false), tensor_field]));
+    Ok(RecordBatch::try_new(schema, vec![
+        Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+        Arc::new(tensor) as ArrayRef,
+    ])?)
+}
+
+async fn tensor_decomposition_batches(ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
+    let one = Expr::Literal(ScalarValue::Int64(Some(1)), None);
+    let two = Expr::Literal(ScalarValue::Int64(Some(2)), None);
+    let fifty = Expr::Literal(ScalarValue::Int64(Some(50)), None);
+    let tolerance = Expr::Literal(ScalarValue::Float64(Some(1.0e-8)), None);
+    let ranks = Expr::Literal(scalar_int32_list(vec![1, 1, 1]), None);
+
+    ctx.table("direct_tensor_decomposition")
+        .await?
+        .select(vec![
+            col("id"),
+            col("tensor_batch"),
+            ndatafusion::functions::tensor_cp_als3(col("tensor_batch"), one.clone(), vec![
+                fifty.clone(),
+                tolerance.clone(),
+            ])
+            .alias("cp3"),
+            ndatafusion::functions::tensor_cp_als_nd(col("tensor_batch"), one, vec![
+                fifty.clone(),
+                tolerance.clone(),
+            ])
+            .alias("cp_nd"),
+            ndatafusion::functions::tensor_hosvd_nd(col("tensor_batch"), ranks.clone())
+                .alias("hosvd"),
+            ndatafusion::functions::tensor_hooi_nd(col("tensor_batch"), ranks, vec![
+                fifty,
+                tolerance.clone(),
+            ])
+            .alias("hooi"),
+            ndatafusion::functions::tensor_tt_svd(col("tensor_batch"), vec![
+                two.clone(),
+                tolerance.clone(),
+            ])
+            .alias("tt"),
+        ])?
+        .select(vec![
+            col("id"),
+            ndatafusion::functions::tensor_cp_als3_reconstruct(col("cp3")).alias("cp3_tensor"),
+            ndatafusion::functions::tensor_cp_als_nd_reconstruct(col("cp_nd"))
+                .alias("cp_nd_tensor"),
+            ndatafusion::functions::tensor_tucker_project(col("tensor_batch"), col("hosvd"))
+                .alias("projected"),
+            ndatafusion::functions::tensor_tucker_expand(col("hosvd")).alias("expanded"),
+            ndatafusion::functions::tensor_tucker_expand(col("hooi")).alias("hooi_expanded"),
+            ndatafusion::functions::tensor_tt_svd_reconstruct(col("tt")).alias("tt_tensor"),
+            ndatafusion::functions::tensor_tt_norm(col("tt")).alias("tt_norm"),
+            ndatafusion::functions::tensor_tt_inner(col("tt"), col("tt")).alias("tt_inner"),
+            ndatafusion::functions::tensor_tt_svd_reconstruct(
+                ndatafusion::functions::tensor_tt_round(col("tt"), vec![two, tolerance]),
+            )
+            .alias("rounded_tensor"),
+        ])?
+        .collect()
+        .await
+}
+
+async fn tucker_only_batches(ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
+    let ranks = Expr::Literal(scalar_int32_list(vec![1, 1, 1]), None);
+    ctx.table("direct_tensor_decomposition")
+        .await?
+        .select(vec![
+            col("id"),
+            col("tensor_batch"),
+            ndatafusion::functions::tensor_hosvd_nd(col("tensor_batch"), ranks.clone())
+                .alias("hosvd"),
+            ndatafusion::functions::tensor_hooi_nd(col("tensor_batch"), ranks, vec![
+                Expr::Literal(ScalarValue::Int64(Some(50)), None),
+                Expr::Literal(ScalarValue::Float64(Some(1.0e-8)), None),
+            ])
+            .alias("hooi"),
+        ])?
+        .select(vec![
+            col("id"),
+            ndatafusion::functions::tensor_tucker_project(col("tensor_batch"), col("hosvd"))
+                .alias("projected"),
+            ndatafusion::functions::tensor_tucker_expand(col("hosvd")).alias("expanded"),
+            ndatafusion::functions::tensor_tucker_expand(col("hooi")).alias("hooi_expanded"),
+        ])?
+        .collect()
+        .await
+}
+
+fn assert_rank4_tensor_columns(
+    batch: &RecordBatch,
+    indices: &[usize],
+    expected_shape: &[usize],
+    context: &str,
+) {
+    for &index in indices {
+        let field = batch.schema().field(index).clone();
+        let output =
+            batch.column(index).as_any().downcast_ref::<FixedSizeListArray>().expect(context);
+        let output = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(&field, output)
+            .expect(context)
+            .into_dimensionality::<Ix4>()
+            .expect("rank-4 tensor output");
+        assert_eq!(output.shape(), expected_shape, "unexpected tensor shape at column {index}");
+        assert!(output.iter().all(|value| value.is_finite()));
+    }
 }
 
 fn assert_direct_complex_tensor_results(batch: &RecordBatch) {
@@ -1004,6 +1403,7 @@ async fn sql_direct_complex_spectral_queries_execute() -> Result<()> {
         .sql(
             "SELECT
                 id,
+                matrix_eigen_nonsymmetric_complex(spectral_matrix) AS nonsymmetric_eigen,
                 matrix_schur_complex(spectral_matrix) AS schur,
                 matrix_polar_complex(spectral_matrix) AS polar,
                 matrix_exp_complex(
@@ -1024,6 +1424,43 @@ async fn sql_direct_complex_spectral_queries_execute() -> Result<()> {
 
     assert_eq!(batches.len(), 1);
     assert_direct_complex_spectral_results(&batches[0]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_real_spectral_and_equation_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    drop(ctx.register_batch(
+        "direct_real_spectral_and_equation",
+        direct_real_spectral_and_equation_batch()?,
+    )?);
+
+    let query = if cfg!(feature = "magma-system") {
+        "SELECT
+            id,
+            matrix_eigen_nonsymmetric(spectral_matrix) AS nonsymmetric_eigen,
+            matrix_eigen_nonsymmetric_bi(spectral_matrix) AS nonsymmetric_bi,
+            matrix_solve_sylvester(left_matrix, right_matrix, constant_matrix) AS sylvester,
+            matrix_solve_sylvester_mixed_f64(
+                left_matrix,
+                right_matrix,
+                constant_matrix
+            ) AS sylvester_mixed
+         FROM direct_real_spectral_and_equation"
+    } else {
+        "SELECT
+            id,
+            matrix_eigen_nonsymmetric(spectral_matrix) AS nonsymmetric_eigen,
+            matrix_eigen_nonsymmetric_bi(spectral_matrix) AS nonsymmetric_bi,
+            matrix_solve_sylvester(left_matrix, right_matrix, constant_matrix) AS sylvester
+         FROM direct_real_spectral_and_equation"
+    };
+    let batches = ctx.sql(query).await?.collect().await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_direct_real_spectral_and_equation_results(&batches[0], cfg!(feature = "magma-system"));
     Ok(())
 }
 
@@ -1195,6 +1632,103 @@ async fn sql_linear_regression_fit_aggregate_query_executes() -> Result<()> {
     let r_squared =
         fit.column(1).as_any().downcast_ref::<Float32Array>().expect("r_squared scalar");
     assert_close32(r_squared.value(0), 1.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_windowed_aggregate_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+
+    let observation = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+        vec![
+            Some(vec![Some(1.0), Some(2.0)]),
+            Some(vec![Some(3.0), Some(4.0)]),
+            Some(vec![Some(5.0), Some(6.0)]),
+        ],
+        2,
+    );
+    let design = float32_fixed_size_list_array(vec![vec![1.0], vec![2.0], vec![3.0]]);
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("observation", observation.data_type().clone(), false),
+            Field::new("design", design.data_type().clone(), false),
+            Field::new("response", DataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(vec![1_i64, 2, 3])) as ArrayRef,
+            Arc::new(observation) as ArrayRef,
+            Arc::new(design) as ArrayRef,
+            Arc::new(Int64Array::from(vec![2_i64, 4, 6])) as ArrayRef,
+        ],
+    )?;
+    drop(ctx.register_batch("window_vectors", batch)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                vector_covariance_agg(observation)
+                    OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS covariance,
+                linear_regression_fit(design, response, add_intercept => false)
+                    OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS fit
+             FROM window_vectors
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
+
+    let covariance_field = batches[0].schema().field(1).clone();
+    let covariance = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("covariance output");
+    assert!(covariance.is_null(0));
+    let covariance_row = covariance.slice(1, 1);
+    let covariance_row =
+        covariance_row.as_any().downcast_ref::<FixedSizeListArray>().expect("covariance row");
+    let covariance = ndarrow::fixed_shape_tensor_as_array_viewd::<Float64Type>(
+        &covariance_field,
+        covariance_row,
+    )
+    .expect("covariance tensor")
+    .into_dimensionality::<Ix3>()
+    .expect("rank-3 covariance tensor");
+    assert_close(covariance[[0, 0, 0]], 2.0);
+    assert_close(covariance[[0, 0, 1]], 2.0);
+    assert_close(covariance[[0, 1, 0]], 2.0);
+    assert_close(covariance[[0, 1, 1]], 2.0);
+
+    let fit_field = batches[0].schema().field(2).clone();
+    let DataType::Struct(fields) = fit_field.data_type() else {
+        panic!("expected regression struct output");
+    };
+    let fit = struct_column(&batches[0], 2);
+    let fit = fit.slice(2, 1);
+    let fit = fit.as_any().downcast_ref::<StructArray>().expect("fit row");
+    let coefficients = fit
+        .column(0)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("coefficients variable tensor");
+    let mut coefficients =
+        ndarrow::variable_shape_tensor_iter::<Float32Type>(&fields[0], coefficients)
+            .expect("coefficients iterator");
+    let coefficients = coefficients
+        .next()
+        .expect("first coefficients batch")
+        .expect("coefficient tensor")
+        .1
+        .into_dimensionality::<Ix1>()
+        .expect("coefficient vector");
+    assert_eq!(coefficients.len(), 1);
+    assert_close32(coefficients[0], 2.0);
     Ok(())
 }
 
@@ -1788,6 +2322,236 @@ async fn sql_direct_complex_pca_queries_execute() -> Result<()> {
     assert_eq!(batches.len(), 1);
     assert_direct_complex_pca_results(&batches[0]);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_differentiation_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+    drop(ctx.register_batch("direct_differentiation", direct_differentiation_batch()?)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                jacobian('square', vector_batch, step_size => 1e-4) AS jacobian_out,
+                gradient('sum_squares', vector_batch, step_size => 1e-3) AS gradient_out,
+                hessian('sum_squares', vector_batch, step_size => 1e-2) AS hessian_out
+             FROM direct_differentiation
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 2);
+
+    let jacobian_field = batch.schema().field(1).clone();
+    let jacobian =
+        batch.column(1).as_any().downcast_ref::<FixedSizeListArray>().expect("jacobian output");
+    let jacobian =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(&jacobian_field, jacobian)
+            .expect("jacobian tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 jacobian");
+    assert!((jacobian[[0, 0, 0]] - 4.0).abs() < 1.0e-2);
+    assert!((jacobian[[0, 1, 1]] - 6.0).abs() < 1.0e-2);
+
+    let gradient =
+        batch.column(2).as_any().downcast_ref::<FixedSizeListArray>().expect("gradient output");
+    let gradient = ndarrow::fixed_size_list_as_array2::<Float32Type>(gradient).expect("gradient");
+    assert!((gradient[[0, 0]] - 4.0).abs() < 1.0e-2);
+    assert!((gradient[[0, 1]] - 6.0).abs() < 1.0e-2);
+
+    let hessian_field = batch.schema().field(3).clone();
+    let hessian =
+        batch.column(3).as_any().downcast_ref::<FixedSizeListArray>().expect("hessian output");
+    let hessian =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(&hessian_field, hessian)
+            .expect("hessian tensor")
+            .into_dimensionality::<Ix3>()
+            .expect("rank-3 hessian");
+    assert!((hessian[[0, 0, 0]] - 2.0).abs() < 1.0e-1);
+    assert!((hessian[[0, 1, 1]] - 2.0).abs() < 1.0e-1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_complex_optimization_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+    drop(ctx.register_batch("direct_complex_optimization", direct_complex_optimization_batch()?)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                backtracking_line_search_complex(
+                    'norm_squared',
+                    point_batch,
+                    direction_batch,
+                    initial_step => 1.0,
+                    contraction => 0.5,
+                    sufficient_decrease => 1e-4,
+                    max_iterations => 16
+                ) AS step,
+                gradient_descent_complex(
+                    'norm_squared',
+                    initial_batch,
+                    learning_rate => 0.25,
+                    max_iterations => 256,
+                    tolerance => 1e-6
+                ) AS gd,
+                adam_complex(
+                    'norm_squared',
+                    initial_batch
+                ) AS adam,
+                momentum_descent_complex(
+                    'norm_squared',
+                    initial_batch,
+                    learning_rate => 0.25,
+                    momentum => 0.8,
+                    max_iterations => 256,
+                    tolerance => 1e-6
+                ) AS momentum
+             FROM direct_complex_optimization",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+    assert!(float64_column(batch, 1).value(0) > 0.0);
+
+    let initial_norm = (3.0_f64).sqrt();
+    for index in 2..=4 {
+        let output = batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("optimizer output");
+        let output = ndarrow::complex64_as_array_view2(output).expect("optimizer output view");
+        let norm = (output[[0, 0]].norm_sqr() + output[[0, 1]].norm_sqr()).sqrt();
+        assert!(norm < initial_norm, "optimizer output at column {index} did not reduce norm");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_sparse_factorization_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+    drop(ctx.register_batch("direct_sparse_factorization", direct_sparse_factorization_batch()?)?);
+
+    let batches = ctx
+        .sql(
+            "SELECT
+                id,
+                sparse_lu_solve_with_factorization(sparse_batch, rhs, lu) AS solved,
+                sparse_lu_solve_multiple_with_factorization(
+                    sparse_batch,
+                    rhs_matrices,
+                    lu
+                ) AS solved_many,
+                sparse_apply_jacobi_preconditioner(jacobi, rhs) AS jacobi_rhs,
+                sparse_apply_ilut_preconditioner(ilut, rhs) AS ilut_rhs,
+                sparse_apply_iluk_preconditioner(iluk, rhs) AS iluk_rhs
+             FROM (
+                SELECT
+                    id,
+                    sparse_batch,
+                    rhs,
+                    rhs_matrices,
+                    sparse_lu_factor(sparse_batch) AS lu,
+                    sparse_jacobi_preconditioner(sparse_batch) AS jacobi,
+                    sparse_ilut_factor(
+                        sparse_batch,
+                        drop_tolerance => 1e-8,
+                        max_fill => 8
+                    ) AS ilut,
+                    sparse_iluk_factor(sparse_batch, level_of_fill => 1) AS iluk
+                FROM direct_sparse_factorization
+             )
+             ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 2);
+
+    let mut solved = ndarrow::variable_shape_tensor_iter::<Float32Type>(
+        batch.schema().field(1),
+        struct_column(batch, 1),
+    )
+    .expect("solved iterator");
+    let (_, first) = solved.next().expect("first solve row").expect("first solve row");
+    let (_, second) = solved.next().expect("second solve row").expect("second solve row");
+    let first = first.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    let second = second.into_dimensionality::<Ix1>().expect("rank-1 vector");
+    assert_close32(first[[0]], 1.0 / 11.0);
+    assert_close32(first[[1]], 7.0 / 11.0);
+    assert_close32(second[[0]], 2.0);
+    assert_close32(second[[1]], 2.0);
+
+    for index in 2..=5 {
+        let rows = ndarrow::variable_shape_tensor_iter::<Float32Type>(
+            batch.schema().field(index),
+            struct_column(batch, index),
+        )
+        .expect("sparse output iterator");
+        for row in rows {
+            let (_, row) = row.expect("sparse output row");
+            assert!(
+                row.iter().all(|value| value.is_finite()),
+                "non-finite value in column {index}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_direct_tensor_decomposition_queries_execute() -> Result<()> {
+    let mut ctx = SessionContext::new();
+    ndatafusion::register_all(&mut ctx)?;
+    drop(ctx.register_batch("direct_tensor_decomposition", direct_tensor_decomposition_batch()?)?);
+
+    let batches = tensor_decomposition_batches(&ctx).await?;
+
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+    assert_rank4_tensor_columns(batch, &[1, 2, 6, 9], &[1, 2, 2, 2], "tensor output");
+
+    assert!(float32_column(batch, 7).value(0).is_finite());
+    assert!(float32_column(batch, 8).value(0).is_finite());
+
+    let tucker_batches = tucker_only_batches(&ctx).await?;
+    assert_eq!(tucker_batches.len(), 1);
+    let tucker_batch = &tucker_batches[0];
+    assert_eq!(tucker_batch.num_rows(), 1);
+
+    let projected_field = tucker_batch.schema().field(1).clone();
+    let projected = tucker_batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("projected tensor");
+    let projected =
+        ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(&projected_field, projected)
+            .expect("projected tensor view")
+            .into_dimensionality::<Ix4>()
+            .expect("rank-4 projected tensor");
+    assert_eq!(projected.shape(), &[1, 1, 1, 1]);
+    assert_rank4_tensor_columns(tucker_batch, &[2, 3], &[1, 2, 2, 2], "expanded tensor");
     Ok(())
 }
 

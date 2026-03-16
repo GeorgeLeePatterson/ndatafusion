@@ -130,15 +130,15 @@ fn coerce_regression_fit_arguments(
 
 #[derive(Debug, Clone, PartialEq)]
 struct VectorMoments<T> {
-    len:     usize,
-    count:   u64,
-    mean:    Vec<T>,
-    scatter: Vec<T>,
+    len:   usize,
+    count: u64,
+    sum:   Vec<T>,
+    xtx:   Vec<T>,
 }
 
 impl<T: NabledReal> VectorMoments<T> {
     fn new(len: usize) -> Self {
-        Self { len, count: 0, mean: vec![T::zero(); len], scatter: vec![T::zero(); len * len] }
+        Self { len, count: 0, sum: vec![T::zero(); len], xtx: vec![T::zero(); len * len] }
     }
 
     fn is_empty(&self) -> bool { self.count == 0 }
@@ -160,20 +160,49 @@ impl<T: NabledReal> VectorMoments<T> {
 
         let batch_count = u64::try_from(rows.nrows())
             .map_err(|_| exec_error(function_name, "row count exceeds u64 limits"))?;
-        let batch_mean = rows
-            .mean_axis(Axis(0))
-            .ok_or_else(|| exec_error(function_name, "failed to compute batch mean"))?;
-        let centered = rows.to_owned() - &batch_mean;
-        let batch_scatter = centered.t().dot(&centered);
+        let batch_sum = rows.sum_axis(Axis(0));
+        let batch_xtx = rows.t().dot(rows);
 
         self.merge_batch_stats(
             function_name,
             batch_count,
-            batch_mean.as_slice().ok_or_else(|| {
-                exec_error(function_name, "batch mean was not stored contiguously")
+            batch_sum.as_slice().ok_or_else(|| {
+                exec_error(function_name, "batch sum was not stored contiguously")
             })?,
-            batch_scatter.as_slice().ok_or_else(|| {
-                exec_error(function_name, "batch scatter matrix was not stored contiguously")
+            batch_xtx.as_slice().ok_or_else(|| {
+                exec_error(function_name, "batch xtx matrix was not stored contiguously")
+            })?,
+        )
+    }
+
+    fn retract_batch(&mut self, function_name: &str, rows: &ArrayView2<'_, T>) -> Result<()> {
+        if rows.ncols() != self.len {
+            return Err(exec_error(
+                function_name,
+                format!(
+                    "vector width mismatch while retracting state: expected {}, found {}",
+                    self.len,
+                    rows.ncols()
+                ),
+            ));
+        }
+        if rows.nrows() == 0 {
+            return Ok(());
+        }
+
+        let batch_count = u64::try_from(rows.nrows())
+            .map_err(|_| exec_error(function_name, "row count exceeds u64 limits"))?;
+        let batch_sum = rows.sum_axis(Axis(0));
+        let batch_xtx = rows.t().dot(rows);
+
+        self.retract_batch_stats(
+            function_name,
+            batch_count,
+            batch_sum.as_slice().ok_or_else(|| {
+                exec_error(function_name, "batch sum was not stored contiguously")
+            })?,
+            batch_xtx.as_slice().ok_or_else(|| {
+                exec_error(function_name, "batch xtx matrix was not stored contiguously")
             })?,
         )
     }
@@ -182,61 +211,85 @@ impl<T: NabledReal> VectorMoments<T> {
         &mut self,
         function_name: &str,
         batch_count: u64,
-        batch_mean: &[T],
-        batch_scatter: &[T],
+        batch_sum: &[T],
+        batch_xtx: &[T],
+    ) -> Result<()> {
+        self.combine_batch_stats(function_name, batch_count, batch_sum, batch_xtx, false)
+    }
+
+    fn retract_batch_stats(
+        &mut self,
+        function_name: &str,
+        batch_count: u64,
+        batch_sum: &[T],
+        batch_xtx: &[T],
+    ) -> Result<()> {
+        self.combine_batch_stats(function_name, batch_count, batch_sum, batch_xtx, true)
+    }
+
+    fn combine_batch_stats(
+        &mut self,
+        function_name: &str,
+        batch_count: u64,
+        batch_sum: &[T],
+        batch_xtx: &[T],
+        retract: bool,
     ) -> Result<()> {
         if batch_count == 0 {
             return Ok(());
         }
-        if batch_mean.len() != self.len {
+        if batch_sum.len() != self.len {
             return Err(exec_error(
                 function_name,
                 format!(
-                    "vector mean width mismatch while merging states: expected {}, found {}",
+                    "vector sum width mismatch while combining states: expected {}, found {}",
                     self.len,
-                    batch_mean.len()
+                    batch_sum.len()
                 ),
             ));
         }
-        if batch_scatter.len() != self.len * self.len {
+        if batch_xtx.len() != self.len * self.len {
             return Err(exec_error(
                 function_name,
                 format!(
-                    "vector scatter width mismatch while merging states: expected {}, found {}",
+                    "vector xtx width mismatch while combining states: expected {}, found {}",
                     self.len * self.len,
-                    batch_scatter.len()
+                    batch_xtx.len()
                 ),
             ));
         }
-        if self.count == 0 {
-            self.count = batch_count;
-            self.mean.clone_from_slice(batch_mean);
-            self.scatter.clone_from_slice(batch_scatter);
+        if retract {
+            if batch_count > self.count {
+                return Err(exec_error(
+                    function_name,
+                    "cannot retract more observations than currently exist in aggregate state",
+                ));
+            }
+            self.count -= batch_count;
+            if self.count == 0 {
+                self.sum.fill(T::zero());
+                self.xtx.fill(T::zero());
+                return Ok(());
+            }
+            for (left, right) in self.sum.iter_mut().zip(batch_sum.iter().copied()) {
+                *left -= right;
+            }
+            for (left, right) in self.xtx.iter_mut().zip(batch_xtx.iter().copied()) {
+                *left -= right;
+            }
             return Ok(());
         }
 
-        let left_count = self.count;
-        let total_count = left_count
+        self.count = self
+            .count
             .checked_add(batch_count)
             .ok_or_else(|| exec_error(function_name, "aggregate count overflow"))?;
-        let left_scalar = to_scalar::<T>(left_count);
-        let batch_scalar = to_scalar::<T>(batch_count);
-        let total_scalar = to_scalar::<T>(total_count);
-        let correction = (left_scalar * batch_scalar) / total_scalar;
-
-        let mut delta = vec![T::zero(); self.len];
-        for (index, mean) in self.mean.iter_mut().enumerate() {
-            delta[index] = batch_mean[index] - *mean;
-            *mean += delta[index] * (batch_scalar / total_scalar);
+        for (left, right) in self.sum.iter_mut().zip(batch_sum.iter().copied()) {
+            *left += right;
         }
-        for row in 0..self.len {
-            for col in 0..self.len {
-                let index = (row * self.len) + col;
-                self.scatter[index] +=
-                    batch_scatter[index] + (delta[row] * delta[col] * correction);
-            }
+        for (left, right) in self.xtx.iter_mut().zip(batch_xtx.iter().copied()) {
+            *left += right;
         }
-        self.count = total_count;
         Ok(())
     }
 
@@ -244,14 +297,25 @@ impl<T: NabledReal> VectorMoments<T> {
         if self.count < 2 {
             return Err(exec_error(function_name, "at least two observations are required"));
         }
+        let count = to_scalar::<T>(self.count);
         let denominator = to_scalar::<T>(self.count - 1);
         let mut covariance = Array2::<T>::zeros((self.len, self.len));
         for row in 0..self.len {
             for col in 0..self.len {
-                covariance[[row, col]] = self.scatter[(row * self.len) + col] / denominator;
+                let index = (row * self.len) + col;
+                let centered_xtx = self.xtx[index] - ((self.sum[row] * self.sum[col]) / count);
+                covariance[[row, col]] = centered_xtx / denominator;
             }
         }
         Ok(covariance)
+    }
+
+    fn mean_vector(&self, function_name: &str) -> Result<Array1<T>> {
+        if self.count == 0 {
+            return Err(exec_error(function_name, "at least one observation is required"));
+        }
+        let count = to_scalar::<T>(self.count);
+        Ok(Array1::from_iter(self.sum.iter().copied().map(|value| value / count)))
     }
 }
 
@@ -302,6 +366,13 @@ impl VectorMomentsState {
         }
     }
 
+    fn count(&self) -> u64 {
+        match self {
+            Self::F32(state) => state.count,
+            Self::F64(state) => state.count,
+        }
+    }
+
     fn append_batch(&mut self, function_name: &str, rows: &FixedSizeListArray) -> Result<()> {
         match self {
             Self::F32(state) => {
@@ -318,15 +389,15 @@ impl VectorMomentsState {
 
     fn merge_batch(&mut self, function_name: &str, states: &[ArrayRef]) -> Result<()> {
         let counts = expect_state_array::<UInt64Array>(states, 0, function_name, "UInt64Array")?;
-        let means =
+        let sums =
             expect_state_array::<FixedSizeListArray>(states, 1, function_name, "FixedSizeList")?;
-        let scatters =
+        let xtx =
             expect_state_array::<FixedSizeListArray>(states, 2, function_name, "FixedSizeList")?;
 
         match self {
             Self::F32(state) => {
-                let mean_view = fixed_size_list_view2::<Float32Type>(means, function_name)?;
-                let scatter_view = fixed_size_list_view2::<Float32Type>(scatters, function_name)?;
+                let sum_view = fixed_size_list_view2::<Float32Type>(sums, function_name)?;
+                let xtx_view = fixed_size_list_view2::<Float32Type>(xtx, function_name)?;
                 for index in 0..counts.len() {
                     let count = counts.value(index);
                     if count == 0 {
@@ -335,18 +406,18 @@ impl VectorMomentsState {
                     state.merge_batch_stats(
                         function_name,
                         count,
-                        mean_view.row(index).as_slice().ok_or_else(|| {
-                            exec_error(function_name, "state mean row was not contiguous")
+                        sum_view.row(index).as_slice().ok_or_else(|| {
+                            exec_error(function_name, "state sum row was not contiguous")
                         })?,
-                        scatter_view.row(index).as_slice().ok_or_else(|| {
-                            exec_error(function_name, "state scatter row was not contiguous")
+                        xtx_view.row(index).as_slice().ok_or_else(|| {
+                            exec_error(function_name, "state xtx row was not contiguous")
                         })?,
                     )?;
                 }
             }
             Self::F64(state) => {
-                let mean_view = fixed_size_list_view2::<Float64Type>(means, function_name)?;
-                let scatter_view = fixed_size_list_view2::<Float64Type>(scatters, function_name)?;
+                let sum_view = fixed_size_list_view2::<Float64Type>(sums, function_name)?;
+                let xtx_view = fixed_size_list_view2::<Float64Type>(xtx, function_name)?;
                 for index in 0..counts.len() {
                     let count = counts.value(index);
                     if count == 0 {
@@ -355,14 +426,28 @@ impl VectorMomentsState {
                     state.merge_batch_stats(
                         function_name,
                         count,
-                        mean_view.row(index).as_slice().ok_or_else(|| {
-                            exec_error(function_name, "state mean row was not contiguous")
+                        sum_view.row(index).as_slice().ok_or_else(|| {
+                            exec_error(function_name, "state sum row was not contiguous")
                         })?,
-                        scatter_view.row(index).as_slice().ok_or_else(|| {
-                            exec_error(function_name, "state scatter row was not contiguous")
+                        xtx_view.row(index).as_slice().ok_or_else(|| {
+                            exec_error(function_name, "state xtx row was not contiguous")
                         })?,
                     )?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, function_name: &str, rows: &FixedSizeListArray) -> Result<()> {
+        match self {
+            Self::F32(state) => {
+                let view = fixed_size_list_view2::<Float32Type>(rows, function_name)?;
+                state.retract_batch(function_name, &view)?;
+            }
+            Self::F64(state) => {
+                let view = fixed_size_list_view2::<Float64Type>(rows, function_name)?;
+                state.retract_batch(function_name, &view)?;
             }
         }
         Ok(())
@@ -375,7 +460,7 @@ impl VectorMomentsState {
                 ScalarValue::FixedSizeList(Arc::new(fixed_size_list_array_from_flat_rows::<
                     Float32Type,
                 >(
-                    function_name, 1, state.len, &state.mean
+                    function_name, 1, state.len, &state.sum
                 )?)),
                 ScalarValue::FixedSizeList(Arc::new(fixed_size_list_array_from_flat_rows::<
                     Float32Type,
@@ -383,7 +468,7 @@ impl VectorMomentsState {
                     function_name,
                     1,
                     state.len * state.len,
-                    &state.scatter,
+                    &state.xtx,
                 )?)),
             ]),
             Self::F64(state) => Ok(vec![
@@ -391,7 +476,7 @@ impl VectorMomentsState {
                 ScalarValue::FixedSizeList(Arc::new(fixed_size_list_array_from_flat_rows::<
                     Float64Type,
                 >(
-                    function_name, 1, state.len, &state.mean
+                    function_name, 1, state.len, &state.sum
                 )?)),
                 ScalarValue::FixedSizeList(Arc::new(fixed_size_list_array_from_flat_rows::<
                     Float64Type,
@@ -399,7 +484,7 @@ impl VectorMomentsState {
                     function_name,
                     1,
                     state.len * state.len,
-                    &state.scatter,
+                    &state.xtx,
                 )?)),
             ]),
         }
@@ -482,11 +567,12 @@ impl VectorMomentsState {
                     .fold(0.0_f32, |acc, value| acc + value)
                     .max(f32::EPSILON);
                 let explained_variance_ratio = explained.map(|value| *value / total_variance);
+                let mean = state.mean_vector(function_name)?;
                 let pca = nabled::ml::pca::NdarrayPCAResult {
                     components,
                     explained_variance: explained,
                     explained_variance_ratio,
-                    mean: Array1::from_vec(state.mean.clone()),
+                    mean,
                     scores: Array2::zeros((0, keep)),
                 };
                 build_pca_scalar::<Float32Type>(function_name, state.len, pca)
@@ -504,11 +590,12 @@ impl VectorMomentsState {
                     .fold(0.0_f64, |acc, value| acc + value)
                     .max(f64::EPSILON);
                 let explained_variance_ratio = explained.map(|value| *value / total_variance);
+                let mean = state.mean_vector(function_name)?;
                 let pca = nabled::ml::pca::NdarrayPCAResult {
                     components,
                     explained_variance: explained,
                     explained_variance_ratio,
-                    mean: Array1::from_vec(state.mean.clone()),
+                    mean,
                     scores: Array2::zeros((0, keep)),
                 };
                 build_pca_scalar::<Float64Type>(function_name, state.len, pca)
@@ -519,12 +606,10 @@ impl VectorMomentsState {
     fn size(&self) -> usize {
         match self {
             Self::F32(state) => {
-                size_of_val(self)
-                    + (state.mean.capacity() + state.scatter.capacity()) * size_of::<f32>()
+                size_of_val(self) + (state.sum.capacity() + state.xtx.capacity()) * size_of::<f32>()
             }
             Self::F64(state) => {
-                size_of_val(self)
-                    + (state.mean.capacity() + state.scatter.capacity()) * size_of::<f64>()
+                size_of_val(self) + (state.sum.capacity() + state.xtx.capacity()) * size_of::<f64>()
             }
         }
     }
@@ -670,6 +755,69 @@ impl<T: NabledReal> RegressionMoments<T> {
 
         self.merge_batch_stats(function_name, &batch_stats)
     }
+
+    fn retract_batch(
+        &mut self,
+        function_name: &str,
+        design: &ArrayView2<'_, T>,
+        response: &ArrayView1<'_, T>,
+        add_intercept: &BooleanArray,
+    ) -> Result<()> {
+        let add_intercept = collect_bool_argument(function_name, add_intercept)?;
+        if design.ncols() != self.cols || design.nrows() != response.len() {
+            return Err(exec_error(function_name, "design/response batch shape mismatch"));
+        }
+        if design.nrows() == 0 {
+            return Ok(());
+        }
+
+        let batch_count = u64::try_from(design.nrows())
+            .map_err(|_| exec_error(function_name, "row count exceeds u64 limits"))?;
+        if batch_count > self.count {
+            return Err(exec_error(
+                function_name,
+                "cannot retract more observations than currently exist in aggregate state",
+            ));
+        }
+        match (self.add_intercept, add_intercept) {
+            (Some(existing), Some(incoming)) if existing != incoming => {
+                return Err(exec_error(
+                    function_name,
+                    "add_intercept must be constant within each group",
+                ));
+            }
+            (Some(_), None) | (None, Some(_)) if self.count != batch_count => {
+                return Err(exec_error(
+                    function_name,
+                    "cannot retract batches with inconsistent add_intercept state",
+                ));
+            }
+            _ => {}
+        }
+
+        let batch_sum_x = design.sum_axis(Axis(0));
+        let batch_gram_x = design.t().dot(design);
+        let batch_cross_xy = design.t().dot(response);
+        let batch_sum_y = response.iter().copied().fold(T::zero(), |acc, value| acc + value);
+        let batch_sum_y2 = response.dot(response);
+
+        self.count -= batch_count;
+        for (left, right) in self.sum_x.iter_mut().zip(batch_sum_x.iter().copied()) {
+            *left -= right;
+        }
+        for (left, right) in self.xtx.iter_mut().zip(batch_gram_x.iter().copied()) {
+            *left -= right;
+        }
+        for (left, right) in self.xty.iter_mut().zip(batch_cross_xy.iter().copied()) {
+            *left -= right;
+        }
+        self.sum_y -= batch_sum_y;
+        self.sum_y2 -= batch_sum_y2;
+        if self.count == 0 {
+            self.add_intercept = None;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -788,6 +936,48 @@ impl RegressionMomentsState {
                         add_intercept,
                     },
                 )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(
+        &mut self,
+        function_name: &str,
+        design: &FixedSizeListArray,
+        response: &ArrayRef,
+        add_intercept: &BooleanArray,
+    ) -> Result<()> {
+        match self {
+            Self::F32(state) => {
+                let design_view = fixed_size_list_view2::<Float32Type>(design, function_name)?;
+                let response = response
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| exec_error(function_name, "response column must be Float32"))?;
+                if response.null_count() > 0 {
+                    return Err(exec_error(
+                        function_name,
+                        "response column must not contain nulls",
+                    ));
+                }
+                let response = ArrayView1::from(response.values().as_ref());
+                state.retract_batch(function_name, &design_view, &response, add_intercept)?;
+            }
+            Self::F64(state) => {
+                let design_view = fixed_size_list_view2::<Float64Type>(design, function_name)?;
+                let response = response
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .ok_or_else(|| exec_error(function_name, "response column must be Float64"))?;
+                if response.null_count() > 0 {
+                    return Err(exec_error(
+                        function_name,
+                        "response column must not contain nulls",
+                    ));
+                }
+                let response = ArrayView1::from(response.values().as_ref());
+                state.retract_batch(function_name, &design_view, &response, add_intercept)?;
             }
         }
         Ok(())
@@ -1126,8 +1316,23 @@ impl Accumulator for VectorMomentsAccumulator {
         self.state.merge_batch(self.function_name, states)
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let Some(value) = values.first() else {
+            return Err(exec_error(self.function_name, "missing vector argument"));
+        };
+        let rows = value.as_any().downcast_ref::<FixedSizeListArray>().ok_or_else(|| {
+            exec_error(self.function_name, "vector argument must be FixedSizeList")
+        })?;
+        self.state.retract_batch(self.function_name, rows)
+    }
+
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.state.is_empty() {
+            return ScalarValue::try_from(self.return_field.data_type());
+        }
+        if matches!(self.function_name, "vector_covariance_agg" | "vector_correlation_agg")
+            && self.state.count() < 2
+        {
             return ScalarValue::try_from(self.return_field.data_type());
         }
         match self.function_name {
@@ -1139,6 +1344,8 @@ impl Accumulator for VectorMomentsAccumulator {
     }
 
     fn size(&self) -> usize { size_of_val(self) + self.state.size() }
+
+    fn supports_retract_batch(&self) -> bool { true }
 }
 
 #[derive(Debug)]
@@ -1172,6 +1379,22 @@ impl Accumulator for RegressionMomentsAccumulator {
         self.state.merge_batch("linear_regression_fit", states)
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.len() != 3 {
+            return Err(exec_error(
+                "linear_regression_fit",
+                "expected design, response, and add_intercept arguments",
+            ));
+        }
+        let design = values[0].as_any().downcast_ref::<FixedSizeListArray>().ok_or_else(|| {
+            exec_error("linear_regression_fit", "design argument must be FixedSizeList")
+        })?;
+        let add_intercept = values[2].as_any().downcast_ref::<BooleanArray>().ok_or_else(|| {
+            exec_error("linear_regression_fit", "add_intercept argument must be Boolean")
+        })?;
+        self.state.retract_batch("linear_regression_fit", design, &values[1], add_intercept)
+    }
+
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.state.is_empty() {
             return ScalarValue::try_from(self.return_field.data_type());
@@ -1180,6 +1403,8 @@ impl Accumulator for RegressionMomentsAccumulator {
     }
 
     fn size(&self) -> usize { size_of_val(self) + self.state.size() }
+
+    fn supports_retract_batch(&self) -> bool { true }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1225,9 +1450,14 @@ impl AggregateUDFImpl for VectorCovarianceAgg {
         let contract = parse_vector_field(&args.input_fields[0], self.name(), 1)?;
         Ok(vec![
             state_count_field(&format!("{}_count", args.name)),
-            vector_field(&format!("{}_mean", args.name), &contract.value_type, contract.len, true)?,
+            vector_field(
+                &format!("{}_sum_x", args.name),
+                &contract.value_type,
+                contract.len,
+                true,
+            )?,
             flat_matrix_state_field(
-                &format!("{}_scatter", args.name),
+                &format!("{}_xtx", args.name),
                 &contract.value_type,
                 contract.len,
             )?,
@@ -1293,9 +1523,14 @@ impl AggregateUDFImpl for VectorCorrelationAgg {
         let contract = parse_vector_field(&args.input_fields[0], self.name(), 1)?;
         Ok(vec![
             state_count_field(&format!("{}_count", args.name)),
-            vector_field(&format!("{}_mean", args.name), &contract.value_type, contract.len, true)?,
+            vector_field(
+                &format!("{}_sum_x", args.name),
+                &contract.value_type,
+                contract.len,
+                true,
+            )?,
             flat_matrix_state_field(
-                &format!("{}_scatter", args.name),
+                &format!("{}_xtx", args.name),
                 &contract.value_type,
                 contract.len,
             )?,
@@ -1391,9 +1626,14 @@ impl AggregateUDFImpl for VectorPcaFit {
         let contract = parse_vector_field(&args.input_fields[0], self.name(), 1)?;
         Ok(vec![
             state_count_field(&format!("{}_count", args.name)),
-            vector_field(&format!("{}_mean", args.name), &contract.value_type, contract.len, true)?,
+            vector_field(
+                &format!("{}_sum_x", args.name),
+                &contract.value_type,
+                contract.len,
+                true,
+            )?,
             flat_matrix_state_field(
-                &format!("{}_scatter", args.name),
+                &format!("{}_xtx", args.name),
                 &contract.value_type,
                 contract.len,
             )?,
@@ -1800,17 +2040,17 @@ mod tests {
         let field = Arc::new(Field::new("vector_rows", rows.data_type().clone(), false));
         let contract = VectorContract { value_type: DataType::Float32, len: 2 };
 
-        let covariance = VectorCovarianceAgg::new()
+        let covariance_field = VectorCovarianceAgg::new()
             .return_field(&[Arc::clone(&field)])
             .expect("covariance return field");
         let correlation = VectorCorrelationAgg::new()
             .return_field(&[Arc::clone(&field)])
             .expect("correlation return field");
-        assert_eq!(covariance.data_type(), correlation.data_type());
+        assert_eq!(covariance_field.data_type(), correlation.data_type());
 
         let mut accumulator = VectorMomentsAccumulator {
             function_name: "vector_covariance_agg",
-            return_field:  Arc::clone(&covariance),
+            return_field:  Arc::clone(&covariance_field),
             state:         VectorMomentsState::from_contract(&contract).expect("vector state"),
         };
         assert!(accumulator.evaluate().expect("empty scalar").is_null());
@@ -1823,7 +2063,7 @@ mod tests {
 
         let mut merged = VectorMomentsAccumulator {
             function_name: "vector_covariance_agg",
-            return_field:  Arc::clone(&covariance),
+            return_field:  Arc::clone(&covariance_field),
             state:         VectorMomentsState::from_contract(&contract).expect("vector state"),
         };
         merged.merge_batch(&state_arrays).expect("merge batch");
@@ -1832,7 +2072,7 @@ mod tests {
             panic!("expected covariance fixed-size-list scalar");
         };
         let covariance = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
-            &covariance,
+            &covariance_field,
             &covariance_array,
         )
         .expect("covariance tensor")
@@ -1841,6 +2081,29 @@ mod tests {
         assert_eq!(covariance.shape(), &[1, 2, 2]);
         assert!((covariance[[0, 0, 0]] - 4.0).abs() < 1.0e-5);
         assert!((covariance[[0, 1, 1]] - 4.0).abs() < 1.0e-5);
+
+        merged
+            .retract_batch(&[
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                    vec![Some(vec![Some(1.0), Some(2.0)])],
+                    2,
+                )) as ArrayRef,
+            ])
+            .expect("retract batch");
+        let ScalarValue::FixedSizeList(retracted_array) =
+            merged.evaluate().expect("retracted covariance")
+        else {
+            panic!("expected covariance fixed-size-list scalar");
+        };
+        let retracted = ndarrow::fixed_shape_tensor_as_array_viewd::<Float32Type>(
+            &covariance_field,
+            &retracted_array,
+        )
+        .expect("retracted covariance tensor")
+        .into_dimensionality::<Ix3>()
+        .expect("rank-3 covariance tensor");
+        assert!((retracted[[0, 0, 0]] - 2.0).abs() < 1.0e-5);
+        assert!(merged.supports_retract_batch());
     }
 
     #[test]
@@ -2067,6 +2330,23 @@ mod tests {
             panic!("expected regression struct scalar");
         };
         assert_regression_coefficients_f32(&output);
+
+        merged
+            .retract_batch(&[
+                Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                    vec![Some(vec![Some(3.0_f32)])],
+                    1,
+                )) as ArrayRef,
+                Arc::new(Float32Array::from(vec![6.0_f32])) as ArrayRef,
+                Arc::new(bools(false, 1)) as ArrayRef,
+            ])
+            .expect("retract regression batch");
+        let ScalarValue::Struct(output) = merged.evaluate().expect("retracted regression output")
+        else {
+            panic!("expected regression struct scalar");
+        };
+        assert_regression_coefficients_f32(&output);
+        assert!(merged.supports_retract_batch());
     }
 
     #[test]

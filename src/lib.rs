@@ -2,8 +2,9 @@
 //! `ndatafusion` provides linear algebra and machine learning scalar and aggregate UDFs for
 //! `DataFusion`.
 //!
-//! Register the catalog with [`register_all`] and call the functions from SQL or by constructing
-//! expressions with helpers from [`functions`].
+//! Register the scalar and aggregate catalog with [`register_all`], or register the full SQL
+//! surface including table functions with [`register_all_session`]. Call the functions from SQL or
+//! by constructing expressions with helpers from [`functions`].
 //!
 //! The current catalog supports `Float32` and `Float64` across dense vector, dense matrix, sparse
 //! CSR, fixed-shape tensor, variable-shape tensor, grouped statistics/model fits, and selected
@@ -67,12 +68,15 @@
 //! - constructors for canonical numerical values
 //! - dense vector operations, including the current complex-vector subset
 //! - complex dense matrix products, statistics, iterative solvers, matrix functions, and the
-//!   current complex Schur/polar subset
-//! - dense matrix operations, decompositions, and direct solvers
+//!   current complex eigen / Schur / polar subset
+//! - dense matrix operations, decompositions, direct solvers, and Sylvester matrix equations
 //! - sparse CSR operations
 //! - fixed-shape and variable-shape tensor operations, including the current complex tensor subset
+//! - differentiation, optimization, and matrix-equation helpers
 //! - statistics, real and complex PCA, iterative solvers, and linear regression
 //! - grouped aggregate fits for covariance, correlation, PCA, and linear regression
+//! - sparse factorization, tensor decomposition, and the `unpack_struct` table function via
+//!   [`register_all_session`]
 //!
 //! For the complete SQL function inventory and notes on result contracts, see `CATALOG.md` in the
 //! repository root. For small copy-paste query examples, see `EXERCISES.md`.
@@ -100,8 +104,9 @@ pub(crate) mod udaf;
 pub mod udafs;
 pub mod udf;
 pub mod udfs;
+pub(crate) mod udtf;
 
-pub use register::register_all;
+pub use register::{register_all, register_all_session};
 
 #[cfg(test)]
 mod udf_tests;

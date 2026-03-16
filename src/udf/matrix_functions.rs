@@ -4,10 +4,11 @@ use std::sync::{Arc, LazyLock};
 use datafusion::arrow::array::FixedSizeListArray;
 use datafusion::arrow::array::types::{ArrowPrimitiveType, Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion::common::Result;
+use datafusion::common::{Result, ScalarValue};
+use datafusion::logical_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion::logical_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature,
 };
 use ndarray::{Array3, Axis};
 use ndarrow::NdarrowElement;
@@ -821,6 +822,31 @@ impl ScalarUDFImpl for MatrixPower {
         }
     }
 
+    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let [matrix, power] = args.as_slice() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+        if matches!(
+            power,
+            Expr::Literal(
+                ScalarValue::Float32(Some(1.0))
+                    | ScalarValue::Float64(Some(1.0))
+                    | ScalarValue::Int8(Some(1))
+                    | ScalarValue::Int16(Some(1))
+                    | ScalarValue::Int32(Some(1))
+                    | ScalarValue::Int64(Some(1))
+                    | ScalarValue::UInt8(Some(1))
+                    | ScalarValue::UInt16(Some(1))
+                    | ScalarValue::UInt32(Some(1))
+                    | ScalarValue::UInt64(Some(1)),
+                _,
+            )
+        ) {
+            return Ok(ExprSimplifyResult::Simplified(matrix.clone()));
+        }
+        Ok(ExprSimplifyResult::Original(args))
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
             matrix_doc(
@@ -888,6 +914,31 @@ impl ScalarUDFImpl for MatrixPowerComplex {
         invoke_complex_square_matrix_tensor_output(&args, self.name(), |view| {
             nabled::linalg::matrix_functions::matrix_power_complex_view(view, power)
         })
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let [matrix, power] = args.as_slice() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+        if matches!(
+            power,
+            Expr::Literal(
+                ScalarValue::Float32(Some(1.0))
+                    | ScalarValue::Float64(Some(1.0))
+                    | ScalarValue::Int8(Some(1))
+                    | ScalarValue::Int16(Some(1))
+                    | ScalarValue::Int32(Some(1))
+                    | ScalarValue::Int64(Some(1))
+                    | ScalarValue::UInt8(Some(1))
+                    | ScalarValue::UInt16(Some(1))
+                    | ScalarValue::UInt32(Some(1))
+                    | ScalarValue::UInt64(Some(1)),
+                _,
+            )
+        ) {
+            return Ok(ExprSimplifyResult::Simplified(matrix.clone()));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

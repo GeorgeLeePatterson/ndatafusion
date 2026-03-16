@@ -83,18 +83,26 @@ For the user-facing SQL catalog, see [CATALOG.md](https://github.com/GeorgeLeePa
 For quick copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
 For runnable examples, see `cargo run --example hello_sql`, `cargo run --example direct_arrow_vectors`, and `cargo run --example pca_pipeline`.
 
-`ndatafusion` registers a direct batch-native catalog across 105 scalar UDFs and 4 aggregate UDFs:
+`ndatafusion` currently registers:
+
+1. `147` scalar UDFs through `register_all`
+2. `4` aggregate UDFs through `register_all`
+3. `1` table function through `register_all_session`
+
+The current surface includes:
 
 1. canonical SQL constructors for dense vector, dense matrix, fixed-shape tensor,
    variable-shape tensor, and CSR sparse-matrix batches
 2. dense vector row ops plus complex-vector Hermitian dot / norm / cosine-similarity /
-   normalization helpers over canonical `ndarrow.complex64` vectors
+   normalization helpers over canonical `ndarrow.complex64` vectors, plus named-function
+   differentiation helpers (`jacobian`, `jacobian_central`, `gradient`, `hessian`)
 3. complex dense matrix matvec / matmat, complex matrix statistics, and complex dense iterative
    solvers over canonical `arrow.fixed_shape_tensor<ndarrow.complex64>` matrix batches
 4. dense matrix matvec, batched matmul, lower/upper triangular solves, and
    LU/Cholesky/QR least-squares solves
 5. struct-valued LU, Cholesky, QR, reduced QR, pivoted QR, SVD, truncated SVD,
-   tolerance-thresholded SVD, symmetric/generalized eigen, Schur, polar, their current complex
+   tolerance-thresholded SVD, symmetric/generalized eigen, real-input complex nonsymmetric
+   eigen plus bi-eigen, complex nonsymmetric eigen, Schur, polar, their current complex
    Schur/polar counterparts, and PCA workflows
 6. matrix inverse, determinant, log-determinant, QR condition number / reconstruction,
    SVD null-space / pseudo-inverse / condition number / rank / reconstruction,
@@ -112,6 +120,12 @@ For runnable examples, see `cargo run --example hello_sql`, `cargo run --example
    iterative solvers, linear regression, and grouped aggregate fits for vector
    covariance/correlation/PCA and linear regression
 10. sparse direct solve via `sparse_lu_solve`
+11. Sylvester matrix-equation solvers for real and complex batches, including mixed-precision
+    result contracts that report refinement iterations when `magma-system` is enabled
+12. complex optimization helpers, sparse factorization/preconditioner UDFs, and tensor
+    decomposition / tensor-train / Tucker UDFs over canonical batch contracts
+13. retractable grouped aggregates that can also be used in ordered window frames, and the
+    generic `unpack_struct` table function for turning struct-valued results into one-row tables
 
 The current real-valued surface supports `Float32` and `Float64` across the implemented catalog.
 The current complex-valued surface covers canonical `ndarrow.complex64` dense vector, dense
@@ -129,6 +143,13 @@ crate also has end-to-end SQL integration coverage for:
 9. fixed-shape tensor constructor plus reduction pipelines
 10. fixed-shape tensor axis permutation / contraction queries
 11. direct canonical complex vector, matrix, and tensor queries without `make_*`
+12. direct sparse factorization, tensor decomposition, differentiation, optimization, grouped
+    aggregate, and ordered window queries
+
+If you want the table-function surface in SQL, register with `ndatafusion::register_all_session`
+instead of `register_all`. The current table-function catalog exposes:
+
+1. `unpack_struct`, which expands a scalar struct-valued expression into a one-row relation
 
 ## License
 

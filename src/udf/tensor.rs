@@ -3,10 +3,11 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::types::{Float32Type, Float64Type};
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion::common::Result;
+use datafusion::common::{Result, ScalarValue};
+use datafusion::logical_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion::logical_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature,
 };
 use nabled::core::prelude::NabledReal;
 use ndarray::{Axis, IxDyn};
@@ -837,6 +838,50 @@ impl ScalarUDFImpl for TensorPermuteAxes {
                 Err(exec_error(self.name(), format!("unsupported tensor value type {actual}")))
             }
         }
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        fn matches_permutation_index(index: usize, expr: &Expr) -> bool {
+            match expr {
+                Expr::Literal(ScalarValue::Int64(Some(value)), _) => {
+                    i64::try_from(index).ok() == Some(*value)
+                }
+                Expr::Literal(ScalarValue::Int32(Some(value)), _) => {
+                    i32::try_from(index).ok() == Some(*value)
+                }
+                Expr::Literal(ScalarValue::UInt64(Some(value)), _) => {
+                    u64::try_from(index).ok() == Some(*value)
+                }
+                Expr::Literal(ScalarValue::UInt32(Some(value)), _) => {
+                    u32::try_from(index).ok() == Some(*value)
+                }
+                Expr::Literal(ScalarValue::UInt16(Some(value)), _) => {
+                    u16::try_from(index).ok() == Some(*value)
+                }
+                Expr::Literal(ScalarValue::UInt8(Some(value)), _) => {
+                    u8::try_from(index).ok() == Some(*value)
+                }
+                Expr::Literal(ScalarValue::Int16(Some(value)), _) => {
+                    i16::try_from(index).ok() == Some(*value)
+                }
+                Expr::Literal(ScalarValue::Int8(Some(value)), _) => {
+                    i8::try_from(index).ok() == Some(*value)
+                }
+                _ => false,
+            }
+        }
+
+        let Some((tensor, permutation)) = args.split_first() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+        if permutation
+            .iter()
+            .enumerate()
+            .all(|(index, expr)| matches_permutation_index(index, expr))
+        {
+            return Ok(ExprSimplifyResult::Simplified(tensor.clone()));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
