@@ -17,18 +17,6 @@ categories = ["mathematics", "science", "algorithms", "artificial-intelligence",
 no-default-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
-[[example]]
-name = "hello_sql"
-path = "examples/hello_sql.rs"
-
-[[example]]
-name = "direct_arrow_vectors"
-path = "examples/direct_arrow_vectors.rs"
-
-[[example]]
-name = "pca_pipeline"
-path = "examples/pca_pipeline.rs"
-
 [features]
 default = []
 test-utils = ["nabled/test-utils"]
@@ -85,6 +73,18 @@ unused_macro_rules = "warn"
 unused_results = "warn"
 unused_qualifications = "warn"
 variant_size_differences = "warn"
+
+[[example]]
+name = "hello_sql"
+path = "examples/hello_sql.rs"
+
+[[example]]
+name = "direct_arrow_vectors"
+path = "examples/direct_arrow_vectors.rs"
+
+[[example]]
+name = "pca_pipeline"
+path = "examples/pca_pipeline.rs"
 
 [profile.release-with-debug]
 inherits = "release"
