@@ -1,6 +1,6 @@
 [package]
 name = "ndatafusion"
-version = "0.0.1"
+version = "0.0.1-reserve.0"
 edition = "2024"
 rust-version = "1.92"
 authors = ["George Lee Patterson <patterson.george@gmail.com>"]
@@ -32,7 +32,7 @@ accelerator-wgpu = ["nabled/accelerator-wgpu"]
 
 [dependencies]
 async-trait = "0.1.89"
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "8d9b080882179b618a2057e042fc32865f6484b4", features = ["math_expressions"] }
+datafusion = { version = "52.0.0", features = ["math_expressions"] }
 nabled = { version = "0.0.7", default-features = false, features = ["arrow"] }
 ndarrow = { version = "0.0.3" }
 arrow-schema = "58.0.0"
