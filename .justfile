@@ -118,7 +118,7 @@ prepare-release version:
     awk '/^\[package\]/ {in_package=1} in_package && /^version = / {gsub(/"[^"]*"/, "\"{{ version }}\""); in_package=0} {print}' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 
     # Update the README install snippet
-    awk '/^ndatafusion = \{ version = / {gsub(/"[^"]*"/, "\"{{ version }}\"")} {print}' README.md > README.md.tmp && mv README.md.tmp README.md
+    awk '/^ndatafusion = \{ version = / {gsub(/version = "[^"]*"/, "version = \"{{ version }}\"")} {print}' README.md > README.md.tmp && mv README.md.tmp README.md
 
     # Update Cargo.lock
     cargo update --workspace

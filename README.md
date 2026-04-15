@@ -6,7 +6,7 @@
 
 ```toml
 [dependencies]
-ndatafusion = { version = "0.1.0", features = ["0.1.0"] }
+ndatafusion = { version = "0.1.0", features = ["openblas-system"] }
 ```
 
 This crate currently targets `DataFusion 53` on the Arrow 58 line.
