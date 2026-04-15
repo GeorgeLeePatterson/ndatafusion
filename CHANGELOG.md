@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Miscellaneous Tasks
+
+- Removes rogue docsrs cfg_attr ([91531fc](https://github.com/georgeleepatterson/ndatafusion/commit/91531fc95de5e46a2a78da6aa5e90123822bc25e))
+- Patches bug in ci ([a2c962c](https://github.com/georgeleepatterson/ndatafusion/commit/a2c962cf04c2d72407f7ea975ac0849ec381c4a6))
+- Addresses dependabot churn ([2ad71f6](https://github.com/georgeleepatterson/ndatafusion/commit/2ad71f6228c00877161018b437b8515d3a108b52))
+
+## [0.1.0] - 2026-04-15
+
 ### Bug Fixes
 
 - Addresses f64 scalars and removes unnecessary arrow feature ([7dbee8c](https://github.com/georgeleepatterson/ndatafusion/commit/7dbee8c3237f55a50a47a9204110f82ec8c34a08))
@@ -44,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cargo.toml reformatting ([ddff72e](https://github.com/georgeleepatterson/ndatafusion/commit/ddff72e6612e47395d9af677687c44272a13484b))
 - Updates workflows ([32c85b1](https://github.com/georgeleepatterson/ndatafusion/commit/32c85b1f385ebc1e8d7ebb124fbefa6bb4de1401))
 - Updates release workflow ([30080a6](https://github.com/georgeleepatterson/ndatafusion/commit/30080a6b2e31792ba48d8fd7364e6a65d07c1092))
+- Updates ci for incremental builds ([ec6133e](https://github.com/georgeleepatterson/ndatafusion/commit/ec6133e9461b3ab176acafcefda220943c6b53d9))
 
 ### Refactor
 
