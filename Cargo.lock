@@ -2562,7 +2562,7 @@ dependencies = [
 
 [[package]]
 name = "ndatafusion"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
