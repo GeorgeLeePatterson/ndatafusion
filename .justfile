@@ -44,6 +44,9 @@ example example:
 docs:
     cargo doc --no-default-features --no-deps --open
 
+docsrs-check:
+    cargo +nightly rustdoc --lib --no-default-features --config 'build.rustdocflags=["--cfg","docsrs"]'
+
 # --- MAINTENANCE ---
 
 fmt:
@@ -65,6 +68,7 @@ checks:
     cargo +stable clippy --workspace --no-default-features --features accelerator-rayon --all-targets -- -D warnings
     cargo +stable clippy --workspace --no-default-features --features accelerator-wgpu --all-targets -- -D warnings
     {{ provider_env_prefix }} cargo +stable clippy --workspace --no-default-features --features "{{ provider_features }} accelerator-rayon accelerator-wgpu" --all-targets -- -D warnings
+    just -f {{ justfile() }} docsrs-check
     just -f {{ justfile() }} test
 
 # Initialize development environment for maintainers

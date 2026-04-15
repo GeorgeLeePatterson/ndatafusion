@@ -1,4 +1,3 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! `ndatafusion` provides linear algebra and machine learning scalar and aggregate UDFs for
 //! `DataFusion`.
 //!

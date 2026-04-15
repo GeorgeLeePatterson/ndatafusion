@@ -23,7 +23,7 @@ Validation on the current tree:
 
 1. `just checks` passes
 2. line coverage is `90.01%`
-3. `cargo doc --no-default-features --no-deps` passes
+3. `cargo doc --no-default-features --no-deps` passes and `just docsrs-check` passes
 4. `cargo package --allow-dirty --no-default-features` passes
 5. `cargo publish --dry-run --allow-dirty --no-default-features` passes
 

@@ -14,7 +14,7 @@ Validated on the current tree:
    and `nabled 0.0.7`.
 2. `just checks` passes.
 3. line coverage is `90.01%`.
-4. `cargo doc --no-default-features --no-deps` passes.
+4. `cargo doc --no-default-features --no-deps` passes and `just docsrs-check` passes.
 5. `cargo package --allow-dirty --no-default-features` passes.
 6. `cargo publish --dry-run --allow-dirty --no-default-features` passes.
 7. the tag-triggered release workflow can publish to crates.io when `CARGO_REGISTRY_TOKEN` is
@@ -28,11 +28,12 @@ and `Cargo.lock` were still uncommitted during validation. Use a clean tree for 
 1. `just checks`
 2. `cargo llvm-cov clean --workspace && cargo llvm-cov --no-default-features --lib --tests --no-report && cargo llvm-cov report --summary-only --ignore-filename-regex '.*/examples/.*|.*/src/udf/docs.rs' --fail-under-lines 90`
 3. `cargo doc --no-default-features --no-deps`
-4. Verify README install snippet and quick-start examples against the current release and SQL
+4. `just docsrs-check`
+5. Verify README install snippet and quick-start examples against the current release and SQL
    constructor surface.
-5. Verify `docs/STATUS.md`, `docs/EXECUTION_TRACKER.md`, and `docs/CAPABILITY_MATRIX.md` reflect
+6. Verify `docs/STATUS.md`, `docs/EXECUTION_TRACKER.md`, and `docs/CAPABILITY_MATRIX.md` reflect
    the current state truthfully.
-6. Verify `Cargo.toml` metadata:
+7. Verify `Cargo.toml` metadata:
    - `version`
    - `description`
    - `repository`
@@ -40,10 +41,10 @@ and `Cargo.lock` were still uncommitted during validation. Use a clean tree for 
    - `keywords`
    - `categories`
    - forwarded feature list
-7. Confirm the dependency alignment still holds:
+8. Confirm the dependency alignment still holds:
    - `datafusion` resolves from crates.io on the intended release line
    - Arrow remains aligned across `datafusion`, `ndarrow`, and `nabled`
-8. If the GitHub release workflow will own the real publish, confirm `CARGO_REGISTRY_TOKEN` is
+9. If the GitHub release workflow will own the real publish, confirm `CARGO_REGISTRY_TOKEN` is
    configured in GitHub repo secrets.
 
 ## Publish Validation
@@ -55,6 +56,7 @@ that will trigger automated publish:
 2. `cargo publish --dry-run --no-default-features`
 3. Confirm docs.rs posture still matches:
    - `package.metadata.docs.rs.no-default-features = true`
+   - `just docsrs-check` passes on the release tree
    - crate-level docs still describe the constructor-backed `Float32` / `Float64` real-valued
      contract accurately
 4. If the GitHub release workflow will publish, confirm `CARGO_REGISTRY_TOKEN` is set.

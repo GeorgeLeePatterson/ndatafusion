@@ -83,8 +83,14 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
       - name: Build crate docs
         run: cargo doc --no-default-features --no-deps
+
+      - name: Build docs.rs-equivalent rustdoc
+        run: just docsrs-check
 
   coverage:
     name: Coverage
