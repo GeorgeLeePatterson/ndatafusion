@@ -6,6 +6,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    rebase-strategy: "disabled"
     groups:
       # Group all patch updates together
       patch-updates:
@@ -20,3 +21,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 1
+    groups:
+      workflow-actions:
+        patterns:
+          - "*"
