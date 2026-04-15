@@ -1,31 +1,33 @@
 # Publish Checklist
 
-Last updated: 2026-03-13
+Last updated: 2026-04-15
 
 This document is the authoritative release checklist for `ndatafusion`.
 
 ## Current Publication Posture
 
-`ndatafusion` is not crates.io-publishable today.
+`ndatafusion` is crates.io-publishable today.
 
-Reason:
+Validated on the current tree:
 
-1. `datafusion` is still pinned to a git revision on `main` so `ndatafusion` can align with Arrow
-   58 and the released `nabled` / `ndarrow` contract.
-2. Until an Arrow-58-compatible DataFusion release exists on crates.io, `cargo publish` for
-   `ndatafusion` remains intentionally blocked.
-3. Git tag and GitHub releases are still valid today; the blocker is specifically crates.io
-   publication.
+1. `datafusion = "53"` resolves from crates.io and stays aligned with Arrow 58, `ndarrow 0.0.3`,
+   and `nabled 0.0.7`.
+2. `just checks` passes.
+3. line coverage is `90.01%`.
+4. `cargo doc --no-default-features --no-deps` passes.
+5. `cargo package --allow-dirty --no-default-features` passes.
+6. `cargo publish --dry-run --allow-dirty --no-default-features` passes.
 
-Use this checklist for release hardening now, and as the publish gate once the dependency blocker is
-removed.
+The `--allow-dirty` flag above was only needed because dependency-source updates in `Cargo.toml`
+and `Cargo.lock` were still uncommitted during validation. Use a clean tree for the real publish.
 
 ## Pre-Release Gates
 
 1. `just checks`
 2. `cargo llvm-cov clean --workspace && cargo llvm-cov --no-default-features --lib --tests --no-report && cargo llvm-cov report --summary-only --ignore-filename-regex '.*/examples/.*|.*/src/udf/docs.rs' --fail-under-lines 90`
 3. `cargo doc --no-default-features --no-deps`
-4. Verify README quick-start examples against the current SQL constructor surface.
+4. Verify README install snippet and quick-start examples against the current release and SQL
+   constructor surface.
 5. Verify `docs/STATUS.md`, `docs/EXECUTION_TRACKER.md`, and `docs/CAPABILITY_MATRIX.md` reflect
    the current state truthfully.
 6. Verify `Cargo.toml` metadata:
@@ -36,15 +38,15 @@ removed.
    - `keywords`
    - `categories`
    - forwarded feature list
-7. Confirm the DataFusion dependency source:
-   - if it is still a git dependency, do not attempt crates.io publication
-   - if it has moved to a compatible crates.io release, continue with publish validation
+7. Confirm the dependency alignment still holds:
+   - `datafusion` resolves from crates.io on the intended release line
+   - Arrow remains aligned across `datafusion`, `ndarrow`, and `nabled`
 
 ## Publish Validation
 
-Run these only once the DataFusion dependency blocker is removed:
+Run these from a clean tree immediately before the real publish:
 
-1. `cargo package --allow-dirty --no-default-features`
+1. `cargo package --no-default-features`
 2. `cargo publish --dry-run --no-default-features`
 3. Confirm docs.rs posture still matches:
    - `package.metadata.docs.rs.no-default-features = true`
@@ -65,7 +67,7 @@ Every release should call out:
 
 `ndatafusion` is ready for its first crates.io publish only when all are true:
 
-1. the dependency blocker above is gone
+1. `datafusion`, Arrow, `ndarrow`, and `nabled` remain aligned on the intended crates.io release line
 2. the admitted v1 catalog is complete for the chosen scope
 3. release hardening gates are green
 4. README and crate docs reflect the actual published surface, not a planned one

@@ -82,7 +82,7 @@ init-dev:
     @echo "1. Use 'just prepare-release X.Y.Z' to create a release branch and notes"
     @echo "2. Merge the release PR"
     @echo "3. Use 'just tag-release X.Y.Z' to push the tag and trigger the GitHub release workflow"
-    @echo "4. Only add a crates.io token after the DataFusion publish blocker is removed"
+    @echo "4. Add a crates.io token when you are ready to publish from this machine"
     @echo ""
     @echo "Useful commands:"
     @echo "  just release-dry 0.1.0  # Preview what would happen"
@@ -117,6 +117,9 @@ prepare-release version:
     # Update version in root Cargo.toml (in [package] section only)
     awk '/^\[package\]/ {in_package=1} in_package && /^version = / {gsub(/"[^"]*"/, "\"{{ version }}\""); in_package=0} {print}' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 
+    # Update the README install snippet
+    awk '/^ndatafusion = \{ version = / {gsub(/"[^"]*"/, "\"{{ version }}\"")} {print}' README.md > README.md.tmp && mv README.md.tmp README.md
+
     # Update Cargo.lock
     cargo update --workspace
 
@@ -129,7 +132,7 @@ prepare-release version:
     git cliff --unreleased --tag v{{ version }} --strip header -o RELEASE_NOTES.md
 
     # Stage all changes
-    git add Cargo.toml Cargo.lock CHANGELOG.md RELEASE_NOTES.md
+    git add Cargo.toml Cargo.lock README.md CHANGELOG.md RELEASE_NOTES.md
     # Commit
     git commit -m "chore: prepare release v{{ version }}"
 
@@ -173,7 +176,7 @@ tag-release version:
     echo ""
     echo "✅ Tag v{{ version }} created and pushed!"
     echo "The GitHub release workflow will now run automatically."
-    echo "Note: crates.io publication remains blocked until the DataFusion git dependency is removed."
+    echo "Crates.io publication can now proceed separately with 'cargo publish --no-default-features'."
     echo ""
 
 # Preview what a release would do (dry run)
@@ -181,12 +184,13 @@ release-dry version:
     @echo "This would:"
     @echo "1. Create branch: release-v{{ version }}"
     @echo "2. Update version to {{ version }} in Cargo.toml ([package] section only)"
-    @echo "3. Update Cargo.lock"
-    @echo "4. Generate CHANGELOG.md"
-    @echo "5. Generate RELEASE_NOTES.md"
-    @echo "6. Create commit and push branch"
+    @echo "3. Update the README install snippet to {{ version }}"
+    @echo "4. Update Cargo.lock"
+    @echo "5. Generate CHANGELOG.md"
+    @echo "6. Generate RELEASE_NOTES.md"
+    @echo "7. Create commit and push branch"
     @echo ""
     @echo "After PR merge, 'just tag-release {{ version }}' would:"
     @echo "1. Tag the merged commit as v{{ version }}"
     @echo "2. Push the tag (triggering the GitHub release workflow)"
-    @echo "3. Not attempt crates.io publication while the DataFusion git dependency remains"
+    @echo "3. Crates.io publication can proceed separately after the tag if desired"

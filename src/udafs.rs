@@ -1,3 +1,9 @@
+//! Public aggregate-UDF constructors and catalog assembly helpers.
+//!
+//! Use this module when you need direct access to individual aggregate UDF definitions or when you
+//! want to register only the grouped aggregate surface instead of calling
+//! [`crate::register_all`].
+
 use std::sync::Arc;
 
 use datafusion::logical_expr::AggregateUDF;
@@ -7,7 +13,7 @@ pub use crate::udaf::{
     vector_pca_fit_udaf,
 };
 
-/// Return all currently implemented `ndatafusion` aggregate UDFs.
+/// Return the aggregate catalog currently registered by [`crate::register_all`].
 #[must_use]
 pub fn all_default_aggregates() -> Vec<Arc<AggregateUDF>> {
     vec![

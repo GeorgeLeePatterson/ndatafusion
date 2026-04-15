@@ -65,9 +65,11 @@
 29. The first constructor surface is explicit `make_*` scalar UDFs over SQL `List` values plus
     scalar dimensions or shape lists; planner sugar and alternate constructor syntax are deferred
     until the base contracts stabilize.
-30. `ndatafusion` remains git-consumed until DataFusion has a published Arrow-58-compatible
-    crates.io release. README install guidance, crate docs, and publish checklists must not imply
-    crates.io availability while the `datafusion` dependency is still pinned to git.
+30. README install guidance, crate docs, release automation text, and publish checklists must
+    track the real `datafusion` dependency source exactly:
+    - while `datafusion` is pinned to git, they must not imply crates.io publish readiness
+    - once `datafusion` points to a compatible crates.io release, they should reflect crates.io
+      publication readiness and validation status
 31. When SQL functions take data operands followed by control arguments, the preferred call style
     is positional data operands first and named trailing control arguments after them.
 32. Custom coercion augments the explicit `make_*` constructors; it does not replace the

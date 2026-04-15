@@ -5,6 +5,29 @@
 //!
 //! For the complete catalog and notes on input and output contracts, see `CATALOG.md` in the
 //! repository root.
+//!
+//! These builders are intentionally thin wrappers over the registered SQL surface:
+//!
+//! - the helper name matches the SQL function name
+//! - the helper arity matches the SQL function arity
+//! - variadic trailing configuration arguments stay variadic in Rust through `Vec<Expr>`
+//!
+//! Use this module when constructing expressions programmatically. Use [`crate::register_all`] or
+//! [`crate::register_all_session`] when you want the same surface available from SQL strings.
+//!
+//! ```rust
+//! use datafusion::prelude::{SessionContext, col};
+//!
+//! let mut ctx = SessionContext::new();
+//! ndatafusion::register_all(&mut ctx)?;
+//!
+//! let expr = ndatafusion::functions::vector_dot(
+//!     col("left_vector"),
+//!     col("right_vector"),
+//! );
+//! # let _ = expr;
+//! # Ok::<(), datafusion::common::DataFusionError>(())
+//! ```
 
 use datafusion::logical_expr::Expr;
 

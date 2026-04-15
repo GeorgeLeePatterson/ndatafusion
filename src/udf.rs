@@ -1,3 +1,9 @@
+//! Internal UDF family modules grouped by SQL surface area.
+//!
+//! Most callers should use [`crate::udfs`] for selective registration or [`crate::register_all`]
+//! for the full scalar catalog. This module exposes the lower-level family boundaries that back
+//! those higher-level entry points.
+
 pub(crate) mod common;
 pub mod constructors;
 pub mod decomposition;

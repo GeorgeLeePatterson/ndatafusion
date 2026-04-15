@@ -1,6 +1,6 @@
 # Execution Tracker
 
-Last updated: 2026-03-15
+Last updated: 2026-04-15
 
 ## Purpose
 
@@ -20,7 +20,8 @@ Use it to resume work without replaying the full implementation history.
    - ordered window usage through retractable aggregate state
    - the generic `unpack_struct` table function through `register_all_session`
 5. The first planner pass is implemented via per-UDF simplify hooks.
-6. The repository quality gates are green and line coverage is above `90%`.
+6. The repository quality gates are green, line coverage is above `90%`, and publish validation
+   now passes on the crates.io `datafusion 53.0.0` line.
 
 ## Done
 
@@ -28,7 +29,7 @@ Use it to resume work without replaying the full implementation history.
 2. Upstream dependency alignment:
    - `ndarrow 0.0.3`
    - `nabled 0.0.7`
-   - Arrow-58-compatible DataFusion git revision
+   - crates.io `datafusion 53.0.0`
 3. Base crate shape:
    - `register_all`
    - `register_all_session`
@@ -75,17 +76,20 @@ Use it to resume work without replaying the full implementation history.
    - aliases
    - programmatic `documentation()`
    - custom scalar coercion
+13. Publish validation:
+   - `cargo package --allow-dirty --no-default-features`
+   - `cargo publish --dry-run --allow-dirty --no-default-features`
 
 ## Next
 
 Planning-only work remains:
 
-1. decide whether broader planner hooks are worthwhile beyond `simplify`
-2. decide whether custom expression planning is justified for future SQL forms
-3. decide whether any richer table-function catalog is actually better than struct-valued scalar
+1. cut the first crates.io release from the current validated surface
+2. decide whether broader planner hooks are worthwhile beyond `simplify`
+3. decide whether custom expression planning is justified for future SQL forms
+4. decide whether any richer table-function catalog is actually better than struct-valued scalar
    results plus `unpack_struct`
-4. decide whether any dedicated `WindowUDF` surfaces are needed beyond retractable aggregates
-5. revisit crates.io publication once DataFusion has a compatible published release line
+5. decide whether any dedicated `WindowUDF` surfaces are needed beyond retractable aggregates
 
 ## Needed
 
@@ -98,3 +102,5 @@ When the next implementation round starts:
    - typed state
    - sufficient statistics when exact
    - Arrow output materialization only at `evaluate`
+4. keep `docs/PUBLISH_CHECKLIST.md` and release automation text aligned with the real dependency
+   source and publish posture

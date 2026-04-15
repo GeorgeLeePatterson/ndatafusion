@@ -1,6 +1,6 @@
 # Status Snapshot
 
-Last updated: 2026-03-15
+Last updated: 2026-04-15
 
 ## Summary
 
@@ -24,6 +24,8 @@ Validation on the current tree:
 1. `just checks` passes
 2. line coverage is `90.01%`
 3. `cargo doc --no-default-features --no-deps` passes
+4. `cargo package --allow-dirty --no-default-features` passes
+5. `cargo publish --dry-run --allow-dirty --no-default-features` passes
 
 ## Current Surface
 
@@ -44,22 +46,22 @@ Implemented and covered today:
 
 ## Release Posture
 
-`ndatafusion` is ready for continued git consumption.
+`ndatafusion` is ready for continued git consumption and first crates.io publication.
 
-Crates.io publication is still blocked by one external issue:
+Current dependency posture:
 
-1. `datafusion` is still pinned to an Arrow-58-compatible git revision because the published
-   crates.io line does not yet satisfy the Arrow 58 contract required by `ndarrow` and `nabled`
+1. crates.io `datafusion 53.0.0` aligns with Arrow 58, `ndarrow 0.0.3`, and `nabled 0.0.7`
+2. publish validation passes on the current tree
 
 ## Next Directions
 
 The remaining work is no longer foundational implementation. It is planning and selective
 expansion work:
 
-1. broader planner hooks beyond `simplify`, only where they materially help optimization
-2. custom expression planning for SQL forms that do not fit ordinary scalar, aggregate, or table
+1. cut the first crates.io release from the current validated surface
+2. broader planner hooks beyond `simplify`, only where they materially help optimization
+3. custom expression planning for SQL forms that do not fit ordinary scalar, aggregate, or table
    functions
-3. richer table-function surfaces only where a relation-shaped contract is genuinely better than a
+4. richer table-function surfaces only where a relation-shaped contract is genuinely better than a
    struct-valued scalar result
-4. optional dedicated `WindowUDF` surfaces only if retractable aggregates become insufficient
-5. crates.io publication once DataFusion exposes a compatible published release line
+5. optional dedicated `WindowUDF` surfaces only if retractable aggregates become insufficient

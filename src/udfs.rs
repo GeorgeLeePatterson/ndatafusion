@@ -1,3 +1,9 @@
+//! Public scalar-UDF constructors and catalog assembly helpers.
+//!
+//! Each `*_udf` function returns the concrete `ScalarUDF` instance used by
+//! [`crate::register_all`]. Reach for this module when you want to register only a slice of the
+//! catalog instead of the whole default surface.
+
 use std::sync::Arc;
 
 use datafusion::logical_expr::ScalarUDF;
@@ -262,6 +268,7 @@ fn tensor_decomposition_functions() -> Vec<Arc<ScalarUDF>> {
     ]
 }
 
+/// Return the full scalar catalog currently registered by [`crate::register_all`].
 #[must_use]
 pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
     let mut functions = constructor_functions();

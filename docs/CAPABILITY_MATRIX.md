@@ -1,6 +1,6 @@
 # Capability Matrix
 
-Last updated: 2026-03-15
+Last updated: 2026-04-15
 
 ## Purpose
 
@@ -16,10 +16,10 @@ This file is the canonical scope and sufficiency map for `ndatafusion`.
 
 | Area | Capability | Status | Notes |
 |---|---|---|---|
-| Build baseline | Arrow-58-compatible DataFusion dependency | Implemented | Pinned to a git revision on `main`. |
+| Build baseline | Arrow-58-compatible DataFusion dependency | Implemented | Uses crates.io `datafusion 53.0.0` aligned with Arrow 58. |
 | Dependency surface | published `ndarrow` / `nabled` alignment | Implemented | Uses `ndarrow 0.0.3` and `nabled 0.0.7`. |
 | Dependency surface | `nabled` feature forwarding | Implemented | `nabled/arrow` is always enabled; remaining feature flags are forwarded directly. |
-| Publication channel | crates.io-ready dependency posture | Partial | Still blocked by the DataFusion published-release mismatch for Arrow 58. |
+| Publication channel | crates.io-ready dependency posture | Implemented | Publish validation now passes on the current `datafusion 53.0.0` line. |
 | Registration surface | scalar UDF registration | Implemented | `register_all` installs the full scalar catalog. |
 | Registration surface | aggregate UDF registration | Implemented | `register_all` installs the full aggregate catalog. |
 | Registration surface | table-function registration | Implemented | `register_all_session` adds `unpack_struct`. |
@@ -55,10 +55,10 @@ This file is the canonical scope and sufficiency map for `ndatafusion`.
 
 ## Sufficiency Verdict
 
-`ndatafusion` is sufficient for a broad git-consumed release of the current surface.
+`ndatafusion` is sufficient for a broad release of the current surface.
 
-It is not yet sufficient for crates.io publication because of the external DataFusion release
-constraint, not because of a local implementation gap.
+It is now sufficient for crates.io publication on the current `datafusion 53.0.0` line, subject
+to ordinary release execution rather than a dependency-source blocker.
 
 ## Remaining Strategic Work
 
@@ -68,4 +68,3 @@ Only planning-grade expansion work remains:
 2. custom expression planning for SQL forms that cannot be represented cleanly otherwise
 3. optional richer table-function surfaces
 4. optional dedicated `WindowUDF` surfaces beyond retractable aggregates
-5. crates.io publication once the DataFusion published line is Arrow-58-compatible

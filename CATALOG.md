@@ -1,6 +1,6 @@
 # UDF Catalog
 
-Last updated: 2026-03-15
+Last updated: 2026-04-15
 
 This document is the current inventory of the `ndatafusion` SQL catalog.
 For small copy-paste queries, see [EXERCISES.md](https://github.com/GeorgeLeePatterson/ndatafusion/blob/master/EXERCISES.md).
@@ -347,4 +347,4 @@ order-sensitive.
 | Custom expression planning | Missing | Reserved for SQL shapes that cannot be represented cleanly as scalar, aggregate, or table functions. |
 | Richer table-function catalog | Partial | `unpack_struct` exists now; additional relation-shaped functions should be added only where they are clearer than struct-valued scalar outputs. |
 | Dedicated `WindowUDF` catalog | Partial | Rolling use cases already work through retractable aggregates; standalone window functions are optional, not required. |
-| crates.io publication | Missing | Still blocked by the upstream Arrow 58 / DataFusion published-release mismatch. |
+| crates.io-ready dependency posture | Implemented | Dependency posture is crates.io-ready on `datafusion 53.0.0`; actual publication is now a release-execution step rather than an implementation blocker. |

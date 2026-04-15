@@ -2,14 +2,19 @@
 
 `ndatafusion` is a DataFusion extension providing `nabled` powered linear algebra and ML UDFs.
 
-# Install
+## Installation
 
 ```toml
 [dependencies]
 ndatafusion = { version = "0.0.1", features = ["openblas-system"] }
 ```
 
+This crate currently targets `DataFusion 53` on the Arrow 58 line.
+
 `nabled/arrow` is part of the base `ndatafusion` contract and is enabled unconditionally.
+
+`openblas-system` above is only an example provider selection. Choose the forwarded provider and
+accelerator features that match your environment and deployment target.
 
 Feature forwarding follows `nabled` directly:
 
