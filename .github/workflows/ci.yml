@@ -114,7 +114,7 @@ jobs:
           cargo llvm-cov report --lcov --ignore-filename-regex ".*/examples/.*|.*/src/udf/docs.rs" --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
