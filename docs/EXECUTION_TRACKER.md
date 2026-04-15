@@ -22,6 +22,8 @@ Use it to resume work without replaying the full implementation history.
 5. The first planner pass is implemented via per-UDF simplify hooks.
 6. The repository quality gates are green, line coverage is above `90%`, and publish validation
    now passes on the crates.io `datafusion 53.0.0` line.
+7. Tagged release automation now supports GitHub release creation plus crates.io publish when
+   `CARGO_REGISTRY_TOKEN` is configured.
 
 ## Done
 
@@ -79,6 +81,9 @@ Use it to resume work without replaying the full implementation history.
 13. Publish validation:
    - `cargo package --allow-dirty --no-default-features`
    - `cargo publish --dry-run --allow-dirty --no-default-features`
+14. Release automation alignment:
+   - tagged releases can publish to crates.io
+   - workflow-dispatch releases can skip publish or verify publish first
 
 ## Next
 

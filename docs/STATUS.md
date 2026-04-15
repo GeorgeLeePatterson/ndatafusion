@@ -52,6 +52,7 @@ Current dependency posture:
 
 1. crates.io `datafusion 53.0.0` aligns with Arrow 58, `ndarrow 0.0.3`, and `nabled 0.0.7`
 2. publish validation passes on the current tree
+3. the tagged release workflow can publish to crates.io when `CARGO_REGISTRY_TOKEN` is configured
 
 ## Next Directions
 

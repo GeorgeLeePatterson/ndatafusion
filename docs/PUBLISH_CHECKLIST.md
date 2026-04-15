@@ -17,6 +17,8 @@ Validated on the current tree:
 4. `cargo doc --no-default-features --no-deps` passes.
 5. `cargo package --allow-dirty --no-default-features` passes.
 6. `cargo publish --dry-run --allow-dirty --no-default-features` passes.
+7. the tag-triggered release workflow can publish to crates.io when `CARGO_REGISTRY_TOKEN` is
+   configured in GitHub repo secrets.
 
 The `--allow-dirty` flag above was only needed because dependency-source updates in `Cargo.toml`
 and `Cargo.lock` were still uncommitted during validation. Use a clean tree for the real publish.
@@ -41,10 +43,13 @@ and `Cargo.lock` were still uncommitted during validation. Use a clean tree for 
 7. Confirm the dependency alignment still holds:
    - `datafusion` resolves from crates.io on the intended release line
    - Arrow remains aligned across `datafusion`, `ndarrow`, and `nabled`
+8. If the GitHub release workflow will own the real publish, confirm `CARGO_REGISTRY_TOKEN` is
+   configured in GitHub repo secrets.
 
 ## Publish Validation
 
-Run these from a clean tree immediately before the real publish:
+Run these from a clean tree immediately before the real publish, or before pushing the release tag
+that will trigger automated publish:
 
 1. `cargo package --no-default-features`
 2. `cargo publish --dry-run --no-default-features`
@@ -52,6 +57,7 @@ Run these from a clean tree immediately before the real publish:
    - `package.metadata.docs.rs.no-default-features = true`
    - crate-level docs still describe the constructor-backed `Float32` / `Float64` real-valued
      contract accurately
+4. If the GitHub release workflow will publish, confirm `CARGO_REGISTRY_TOKEN` is set.
 
 ## Release Notes Minimum
 

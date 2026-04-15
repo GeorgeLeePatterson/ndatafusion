@@ -6,6 +6,16 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      skip_publish:
+        description: 'Create GitHub release only'
+        default: false
+        required: false
+        type: boolean
+      verify_publish:
+        description: 'Verify publish with --dry-run before publish'
+        default: false
+        required: false
+        type: boolean
       version:
         description: 'Version to release (for example, 0.1.5)'
         required: false
@@ -13,6 +23,11 @@ on:
 
 permissions:
   contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: '-C debuginfo=line-tables-only -C incremental=false'
 
 jobs:
   release:
@@ -53,11 +68,31 @@ jobs:
           if grep -Eq '^datafusion = \{.*git *= *"' Cargo.toml; then
             echo "DataFusion is still sourced from git; this workflow creates a GitHub release only."
           else
-            echo "Cargo.toml is on the crates.io DataFusion line; GitHub release creation happens here and crates.io publication remains a separate explicit step."
+            echo "Cargo.toml is on the crates.io DataFusion line; this workflow can publish to crates.io when CARGO_REGISTRY_TOKEN is configured."
           fi
 
       - name: Verify release packaging
         run: cargo package --no-default-features
+
+      - name: Ensure crates.io token is configured
+        if: ${{ inputs.skip_publish != true }}
+        run: |
+          if [ -z "${{ secrets.CARGO_REGISTRY_TOKEN }}" ]; then
+            echo "Error: CARGO_REGISTRY_TOKEN secret is not configured"
+            exit 1
+          fi
+
+      - name: Verify publish
+        if: ${{ inputs.skip_publish != true && inputs.verify_publish == true }}
+        run: cargo publish --dry-run --no-default-features --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish ndatafusion to crates.io
+        if: ${{ inputs.skip_publish != true }}
+        run: cargo publish --no-default-features --no-verify --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Extract release notes
         run: |

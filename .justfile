@@ -82,7 +82,7 @@ init-dev:
     @echo "1. Use 'just prepare-release X.Y.Z' to create a release branch and notes"
     @echo "2. Merge the release PR"
     @echo "3. Use 'just tag-release X.Y.Z' to push the tag and trigger the GitHub release workflow"
-    @echo "4. Add a crates.io token when you are ready to publish from this machine"
+    @echo "4. Add CARGO_REGISTRY_TOKEN in GitHub repo secrets before tagging if you want automated publish"
     @echo ""
     @echo "Useful commands:"
     @echo "  just release-dry 0.1.0  # Preview what would happen"
@@ -176,7 +176,7 @@ tag-release version:
     echo ""
     echo "✅ Tag v{{ version }} created and pushed!"
     echo "The GitHub release workflow will now run automatically."
-    echo "Crates.io publication can now proceed separately with 'cargo publish --no-default-features'."
+    echo "It will publish to crates.io by default when CARGO_REGISTRY_TOKEN is configured."
     echo ""
 
 # Preview what a release would do (dry run)
@@ -193,4 +193,4 @@ release-dry version:
     @echo "After PR merge, 'just tag-release {{ version }}' would:"
     @echo "1. Tag the merged commit as v{{ version }}"
     @echo "2. Push the tag (triggering the GitHub release workflow)"
-    @echo "3. Crates.io publication can proceed separately after the tag if desired"
+    @echo "3. Publish to crates.io from that workflow by default when CARGO_REGISTRY_TOKEN is configured"
