@@ -22,6 +22,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Determine release version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -50,8 +53,11 @@ jobs:
           if grep -Eq '^datafusion = \{.*git *= *"' Cargo.toml; then
             echo "DataFusion is still sourced from git; this workflow creates a GitHub release only."
           else
-            echo "Cargo.toml no longer pins DataFusion from git; crates.io publication can be added in a later workflow update."
+            echo "Cargo.toml is on the crates.io DataFusion line; GitHub release creation happens here and crates.io publication remains a separate explicit step."
           fi
+
+      - name: Verify release packaging
+        run: cargo package --no-default-features
 
       - name: Extract release notes
         run: |
