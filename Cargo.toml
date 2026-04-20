@@ -33,7 +33,7 @@ accelerator-wgpu = ["nabled/accelerator-wgpu"]
 [dependencies]
 async-trait = "0.1.89"
 datafusion = "53"
-nabled = { version = "0.0.7", default-features = false, features = ["arrow"] }
+nabled = { version = "0.0.8", default-features = false, features = ["arrow"] }
 ndarrow = { version = "0.0.3" }
 arrow-schema = "58.0.0"
 ndarray = "0.17.2"
