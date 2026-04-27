@@ -35,7 +35,7 @@ async-trait = "0.1.89"
 datafusion = "53"
 nabled = { version = "0.0.7", default-features = false, features = ["arrow"] }
 ndarrow = { version = "0.0.3" }
-arrow-schema = "58.0.0"
+arrow-schema = "58.1.0"
 ndarray = "0.17.2"
 ndarray-linalg = { version = "0.18", default-features = false }
 num-complex = "0.4"
