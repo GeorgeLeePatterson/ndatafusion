@@ -21,8 +21,8 @@ jobs:
     outputs:
       deps: ${{ steps.changes.outputs.deps }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: changes
         with:
           filters: |
@@ -41,7 +41,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run audit check
