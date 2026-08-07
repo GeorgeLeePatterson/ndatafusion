@@ -1486,7 +1486,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1528,7 +1528,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2398,9 +2398,9 @@ dependencies = [
 
 [[package]]
 name = "nabled"
-version = "0.0.7"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee32363ad36638232384b20901eea864e6c0c27fe89be600baa7adb64fb8744b"
+checksum = "6ce0dc1d1bc7dafeda839d112ac6189cd0723ef7913677e84bfa009a0dde5a4d"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2409,7 +2409,7 @@ dependencies = [
  "nabled-linalg",
  "nabled-ml",
  "ndarray",
- "ndarrow",
+ "ndarrow 0.0.4",
  "num-complex",
  "num-traits",
  "serde",
@@ -2419,9 +2419,9 @@ dependencies = [
 
 [[package]]
 name = "nabled-core"
-version = "0.0.7"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b14ece9341e47dbabdac01cf5980150a1af7d19a203cbe52b54023ac274fb99"
+checksum = "dfd63f2c4cc2bf50476002979af4dd6f2459600bdbffbd9f345fde0d0bea5bd4"
 dependencies = [
  "ndarray",
  "num-complex",
@@ -2432,9 +2432,9 @@ dependencies = [
 
 [[package]]
 name = "nabled-linalg"
-version = "0.0.7"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75b0b578988730623bc07314051f5769e1f263133cc67507256059aaabcb3079"
+checksum = "34330ee30c961c027cfb34999035270d83d75e07289942eb7a591e9548c0e253"
 dependencies = [
  "bytemuck",
  "nabled-core",
@@ -2451,9 +2451,9 @@ dependencies = [
 
 [[package]]
 name = "nabled-ml"
-version = "0.0.7"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a696e12bb4e0b5b4c7b5abf7d4ca0482027008f21f2d193755590e6f3d8bc43"
+checksum = "746b5b61062921313891a9fe6db6e90e3498b2ed59fdaea7be99c742c61723e4"
 dependencies = [
  "nabled-core",
  "nabled-linalg",
@@ -2561,6 +2561,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndarrow"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc8000771a27dffd8aa4d232ae30bcf3e4fd94b209e8f1cc05ebcf55e5125c9a"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-schema",
+ "ndarray",
+ "num-complex",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "ndatafusion"
 version = "0.1.1"
 dependencies = [
@@ -2570,7 +2588,7 @@ dependencies = [
  "nabled",
  "ndarray",
  "ndarray-linalg",
- "ndarrow",
+ "ndarrow 0.0.3",
  "num-complex",
  "num-traits",
  "serde",
@@ -3213,7 +3231,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3506,7 +3524,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4070,7 +4088,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
